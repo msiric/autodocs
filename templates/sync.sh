@@ -107,7 +107,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
          && grep -q "Verified: YES" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null \
          && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
 
-        APPLY_TOOLS="Read,Write,Bash(git:*)"
+        APPLY_TOOLS="Read,Edit,Write,Bash(git:*)"
         APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_pull_request"
         APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_branch"
 
