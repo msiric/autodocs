@@ -113,6 +113,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
 
         APPLY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/apply-prompt.md")" \
           --add-dir "$OUTPUT_DIR" \
+          --add-dir "$REPO_DIR" \
           --allowedTools "$APPLY_TOOLS" \
           --output-format text \
           2>&1) && APPLY_RC=0 || APPLY_RC=$?
