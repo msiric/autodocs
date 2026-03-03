@@ -1,0 +1,118 @@
+# autodocs configuration — Channel Pages (Loop in Teams)
+# This is a real, working configuration for a 9-person team.
+
+ado:
+  org: domoreexp
+  project: Teamspace
+  repo: teams-modular-packages
+  repo_id: "1b255d6e-1545-42ab-9e75-1fb3f0202dfa"
+
+owner:
+  name: "Mario Siric"
+  email: "marioiri@microsoft.com"
+  ado_id: "eed94acc-c861-68fb-bf74-ab388b367096"
+
+team_members:
+  - name: "Alen Delic"
+    ado_id: "30859895-d4d2-64a7-bb15-850a9fe43ed4"
+  - name: "Fineas Gavre"
+    ado_id: "1abf9b74-d5f7-6600-ba56-0e3f07b93185"
+  - name: "Andrei Fateev"
+    ado_id: "61a6308b-b9eb-6bb4-b370-23fbe8c6dca0"
+  - name: "Magdalini Palaiologou"
+    ado_id: "184f1ca8-bb03-653d-9d5b-7f54a3006c61"
+  - name: "Ryan Vlaming"
+    ado_id: "279a3680-4994-6486-bb3a-11b27f85c998"
+  - name: "Muslimjon Kholjuraev"
+    ado_id: "a8de94a8-74e0-6827-b338-13601878c4c8"
+  - name: "Dima An"
+    ado_id: "034b2f05-2ac0-6a05-8e52-a2efbc3c459a"
+  - name: "Nick Yenin"
+    ado_id: "d4784793-cc2c-664a-9861-33b8d837f6c4"
+
+relevant_paths:
+  - packages/apps/apps-channel-pages/
+  - packages/components/components-channel-pages-entry/
+  - packages/components/components-loop-channel-pages/
+  - packages/components/components-channel-pages-hooks/
+  - packages/components/components-channel-pages-modals/
+  - packages/components/components-fluid/
+  - packages/commands/commands-channel-pages/
+  - packages/events/events-channel-pages/
+  - packages/data/resolvers/data-resolvers-platform-tabs/
+  - exp-configs/react-web-client/channelPages/
+  - packages/core/services/core-services-telemetry-types/definitions/channel-pages.json
+
+relevant_pattern: "*channel-page*"
+
+telemetry:
+  enabled: true
+  cluster: "teamstelemetry01.eastus2.kusto.windows.net"
+  database: "bc3902d8132f43e3ae086a009979fa88"
+  queries:
+    - name: "Overall reliability"
+      description: "Failure rates by Channel Pages scenario in the last 24h"
+      query: |
+        Scenario_Messaging_View
+        | where EventInfo_Time > ago(24h)
+        | where Scenario_Name in ("fluid_create_channel_page", "fluid_load_channel_page",
+            "fluid_link_channel_page", "fluid_link_loop_from_message_to_channel")
+        | where Scenario_Step == "stop"
+        | summarize
+            Total = count(),
+            Failures = countif(Scenario_Status == "failure"),
+            Incomplete = countif(Scenario_Status == "incomplete"),
+            Success = countif(Scenario_Status == "success"),
+            Users = dcount(UserInfo_Id)
+            by Scenario_Name
+        | extend FailureRate = round(100.0 * Failures / Total, 2)
+
+    - name: "Error breakdown"
+      description: "Top errors by count for create and load scenarios"
+      query: |
+        Scenario_Messaging_View
+        | where EventInfo_Time > ago(24h)
+        | where Scenario_Name in ("fluid_create_channel_page", "fluid_load_channel_page")
+        | where Scenario_Status == "failure"
+        | summarize Count = count(), Users = dcount(UserInfo_Id) by Scenario_Name, errors, reason
+        | order by Count desc
+
+    - name: "Retry storm detection"
+      description: "Count of users with >10 failures (no user IDs — aggregate only)"
+      query: |
+        Scenario_Messaging_View
+        | where EventInfo_Time > ago(24h)
+        | where Scenario_Name in ("fluid_create_channel_page", "fluid_load_channel_page")
+        | where Scenario_Status == "failure"
+        | summarize Failures = count() by UserInfo_Id
+        | where Failures > 10
+        | summarize RetryStormUsers = count(), MaxFailures = max(Failures)
+
+docs:
+  - name: "channel-pages.md"
+    package_map:
+      apps-channel-pages: "Complete Render Pipeline"
+      components-channel-pages-entry: "Complete Render Pipeline"
+      components-loop-channel-pages: "Complete Render Pipeline, Error Handling"
+      components-channel-pages-hooks: "Hooks Reference"
+      components-channel-pages-modals: "User Flows"
+      components-fluid:
+        default: "Fluid Engine (multiple sections)"
+        title_hints:
+          "error,fault,exception": "Error Handling"
+          "title,rename,name,sync": "Title Synchronization"
+          "container,snapshot,file creation,detach": "Detached Container Pattern & File Creation"
+          "provision": "Site Provisioning"
+      commands-channel-pages: "Package Architecture"
+      events-channel-pages: "Package Architecture"
+      components-platform-get-header-tabs: "LIE Tab System"
+      data-resolvers-platform-tabs: "Server-Side Resolver"
+      exp-configs/channelPages: "Feature Flags & Settings"
+      core-services-telemetry-types: "Telemetry & Scenarios"
+    ignore_packages:
+      - services-io-browser-i18n
+
+  - name: "telemetry-guide.md"
+    known_patterns_section: "Known Channel Pages Failure Patterns"
+
+last_verified: "2026-03-02"
