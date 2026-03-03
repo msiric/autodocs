@@ -31,6 +31,8 @@ if ! (cd "$REPO_DIR" && claude -p "Reply with OK" --output-format text 2>/dev/nu
   cat > "$STATUS_FILE" <<EOF
 status: failed
 drift: skipped
+suggest: skipped
+apply: skipped
 timestamp: $TIMESTAMP
 error: Claude Code auth expired
 likely_cause: Re-open Claude Code interactively to refresh authentication.
@@ -46,6 +48,8 @@ git fetch origin --quiet 2>/dev/null || echo "[$TIMESTAMP] git fetch failed (non
 # Track results — status is written ONCE at the end
 SYNC_STATUS="failed"
 DRIFT_STATUS="skipped"
+SUGGEST_STATUS="skipped"
+APPLY_STATUS="skipped"
 
 # Call 1: Main sync (PRs + telemetry)
 SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
@@ -85,7 +89,6 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   fi
 
   # Call 3: Suggested updates + changelog (only if drift found actionable alerts)
-  SUGGEST_STATUS="skipped"
   if [ "$DRIFT_STATUS" = "success" ] && [ -f "$OUTPUT_DIR/suggest-prompt.md" ] \
      && grep -qE "HIGH|CRITICAL" "$OUTPUT_DIR/drift-report.md" 2>/dev/null; then
     SUGGEST_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
@@ -102,8 +105,8 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       fi
 
       # Call 4: Apply suggestions as PR (only if config enables auto_pr and suggestions are applicable)
-      APPLY_STATUS="skipped"
       if [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
+         && grep -q "auto_pr" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
          && grep -q "Verified: YES" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null \
          && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
 
@@ -142,7 +145,7 @@ fi
 cat > "$STATUS_FILE" <<EOF
 status: $SYNC_STATUS
 drift: $DRIFT_STATUS
-suggest: ${SUGGEST_STATUS:-skipped}
-apply: ${APPLY_STATUS:-skipped}
+suggest: $SUGGEST_STATUS
+apply: $APPLY_STATUS
 timestamp: $TIMESTAMP
 EOF
