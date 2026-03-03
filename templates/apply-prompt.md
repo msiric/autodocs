@@ -41,6 +41,12 @@ For each applicable suggestion, read the doc file from the repo using its `repo_
 
 If a FIND/anchor text is not found in the repo file, skip that suggestion entirely. Note: "Skipped — FIND text not found in repo copy (may differ from output directory copy)."
 
+## Step 2b: Include Changelog
+
+For each doc that had suggestions applied, check if `${OUTPUT_DIR}/changelog-<doc-name-without-.md-extension>.md` exists. If so, copy it to the same directory as the doc in the repo (next to the doc file at its `repo_path`).
+
+This ensures the changelog — which captures WHY each change was made — is committed alongside the edits and reviewed in the same PR.
+
 ## Step 3: Create Branch and Commit
 
 Determine today's date (YYYY-MM-DD format).
@@ -55,7 +61,7 @@ If the branch already exists, stop. Do not create a duplicate. Note: "Branch alr
 If the branch does not exist, run:
 ```
 git checkout -b <branch_prefix><YYYY-MM-DD>
-git add <all modified doc file paths>
+git add <all modified doc file paths and changelog files>
 git commit -m "docs: autodocs suggested updates for <YYYY-MM-DD>
 
 Applied N verified suggestions:
