@@ -69,9 +69,9 @@ For each feature-relevant PR (YES or MAYBE) from Step 1:
 
 If the PR has a `Files:` list, use the individual file paths to detect drift.
 
-For each file path, find its package by matching against the keys in the `package_map` from config: check if the file path CONTAINS the key as a path segment. If multiple keys match, use the LONGEST matching key. For example, for path `packages/data/resolvers/data-resolvers-platform-tabs/src/worker.ts`, the key `data-resolvers-platform-tabs` matches.
+For each file path, find its package by matching against the keys in the `package_map` from config: check if the file path contains `/<key>/` (the key enclosed by path separators — this ensures exact directory name matching, not substring). If multiple keys match, use the LONGEST matching key. For example, for path `packages/data/resolvers/data-resolvers-platform-tabs/src/worker.ts`, the key `data-resolvers-platform-tabs` matches (because `/.../data-resolvers-platform-tabs/src/...` contains `/data-resolvers-platform-tabs/`).
 
-For each matched package, look up the `package_map`:
+1. **Package lookup:** For each matched package, look up the `package_map`:
    - **Simple mapping** (string value): the value is the doc section name. Create a **HIGH** confidence alert.
    - **Complex mapping** (object with `default` and `title_hints`): Check the PR title against each key in `title_hints`. Keys are comma-separated keywords (case-insensitive). If the title contains any keyword from a key, use that key's value as the section name. If multiple keys match, use the FIRST matching key. If no title hint matches, use the `default` value. Create a **HIGH** confidence alert.
 

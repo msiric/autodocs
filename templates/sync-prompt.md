@@ -21,7 +21,7 @@ Extract:
 - `owner` — the feature owner (name, email, ado_id). Their activity gets a dedicated section.
 - `team_members` — list of team members. The owner is implicitly included.
 - `relevant_paths` — list of path prefixes for feature classification
-- `relevant_pattern` — catch-all glob pattern for classification
+- `relevant_pattern` — catch-all substring for classification
 - `telemetry` — if `telemetry.enabled` is true, extract cluster, database, and queries
 - `docs` — if present and any doc has `known_patterns_section`, note the doc name and section
 
@@ -74,7 +74,7 @@ If ADO is unavailable or returns an error, skip Steps 3-5 entirely. Set a flag t
 
 ## Step 4: Classify PRs (Deterministic Path Matching)
 
-For each PR from Step 3, check whether ANY of its changed file paths match the feature criteria:
+For each PR from Step 3 **that has changed file paths** (skip PRs already classified via the fallback in Step 3 — they keep their classification), check whether ANY of its changed file paths match the feature criteria:
 
 1. **Check `relevant_paths`**: Does any changed file path START WITH any of the path prefixes listed in `relevant_paths` from the config?
 2. **Check `relevant_pattern`**: Does any changed file path match the `relevant_pattern` from config (case-insensitive substring match)?

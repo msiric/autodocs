@@ -119,7 +119,7 @@ relevant_paths: []
   # - packages/your-feature/
 
 relevant_pattern: ""
-  # e.g., "*your-feature*"
+  # e.g., "your-feature" (substring match, not glob)
 
 telemetry:
   enabled: $TELEMETRY_ENABLED
