@@ -10,11 +10,15 @@ You are a documentation update advisor. You read drift alerts and the current do
 - Changelog entries must capture WHY things changed, not just WHAT.
 - Be factual and specific. Do not speculate about code behavior you haven't seen.
 
-## Step 1: Check for Actionable Alerts
+## Step 1: Collect Actionable Alerts
 
-Read `${OUTPUT_DIR}/drift-report.md`.
+Read `${OUTPUT_DIR}/drift-status.md`. Collect all unchecked (`- [ ]`) entries with HIGH or CRITICAL confidence.
 
-If there are no HIGH or CRITICAL alerts in the "Today's Alerts" table, write the following to `${OUTPUT_DIR}/drift-suggestions.md` and stop:
+Read `${OUTPUT_DIR}/changelog-*.md` files (if any exist). Note which (doc, section, PR) combinations already have changelog entries — these have already been processed.
+
+Remove from the collected alerts any that already have a changelog entry for the SAME (doc, section, PR). These are "already suggested" — no need to re-generate.
+
+If no alerts remain after deduplication, write the following to `${OUTPUT_DIR}/drift-suggestions.md` and stop:
 
 ```
 ---
@@ -23,7 +27,7 @@ suggestion_count: 0
 ---
 # Suggested Updates — YYYY-MM-DD
 
-No actionable drift alerts today.
+No new suggestions needed. All unresolved alerts have existing changelog entries.
 ```
 
 ## Step 2: Load Context
@@ -38,15 +42,17 @@ Read `${OUTPUT_DIR}/daily-report.md`. For each PR listed under "## Team PRs", ex
 
 Only PRs classified as YES or MAYBE are relevant.
 
+If a PR from drift-status.md is NOT in today's daily-report.md (it was in a previous day's report), that's OK — use whatever information is available from the alert entry itself (PR number, doc, section).
+
 ## Step 3: Generate Suggestions
 
-For each HIGH or CRITICAL alert in the drift-report.md alerts table:
+For each remaining alert from Step 1:
 
-1. Identify the doc and section from the alert row (the "Doc" and "Section" columns).
+1. Identify the doc and section from the alert entry.
 2. Read the doc file from `${OUTPUT_DIR}/<doc name>`.
 3. Find the section by its header name. Read the section content (from the header to the next same-level header or end of file).
-4. Identify the PR(s) that triggered the alert (from the "PRs" column).
-5. From daily-report.md, get those PRs' Description and Files fields.
+4. Identify the PR(s) that triggered the alert.
+5. If the PR is in today's daily-report.md, get its Description and Files fields. If not, use the PR title from the alert entry.
 
 Now compare the section content against the PR changes and generate a suggestion:
 
