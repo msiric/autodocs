@@ -100,6 +100,32 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       if grep -q "Verified: NO" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
         echo "[$TIMESTAMP] SUGGEST WARNING: some suggestions are UNVERIFIED" >> "$LOG_FILE"
       fi
+
+      # Call 4: Apply suggestions as PR (only if config enables auto_pr and suggestions are applicable)
+      APPLY_STATUS="skipped"
+      if [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
+         && grep -q "Verified: YES" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null \
+         && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
+
+        APPLY_TOOLS="Read,Write,Bash(git:*)"
+        APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_pull_request"
+        APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_branch"
+
+        APPLY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/apply-prompt.md")" \
+          --add-dir "$OUTPUT_DIR" \
+          --allowedTools "$APPLY_TOOLS" \
+          --output-format text \
+          2>&1) && APPLY_RC=0 || APPLY_RC=$?
+
+        if [ $APPLY_RC -eq 0 ]; then
+          APPLY_STATUS="success"
+          echo "[$TIMESTAMP] APPLY SUCCESS" >> "$LOG_FILE"
+        else
+          APPLY_STATUS="failed"
+          echo "[$TIMESTAMP] APPLY FAILED (exit $APPLY_RC)" >> "$LOG_FILE"
+          echo "$APPLY_OUTPUT" | tail -10 >> "$LOG_FILE"
+        fi
+      fi
     else
       SUGGEST_STATUS="failed"
       echo "[$TIMESTAMP] SUGGEST FAILED (exit $SUGGEST_RC)" >> "$LOG_FILE"
@@ -116,5 +142,6 @@ cat > "$STATUS_FILE" <<EOF
 status: $SYNC_STATUS
 drift: $DRIFT_STATUS
 suggest: ${SUGGEST_STATUS:-skipped}
+apply: ${APPLY_STATUS:-skipped}
 timestamp: $TIMESTAMP
 EOF

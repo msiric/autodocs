@@ -132,6 +132,13 @@ telemetry:
 # Reference docs for drift detection (optional)
 # docs: []
 
+# Auto-PR creation (optional, uncomment to enable)
+# Requires docs to be tracked in git (add repo_path to each doc entry).
+# auto_pr:
+#   enabled: true
+#   target_branch: "master"
+#   branch_prefix: "autodocs/"
+
 last_verified: "$(date +%Y-%m-%d)"
 EOF
   echo "Config generated at $CONFIG_FILE"
@@ -148,6 +155,7 @@ echo "Rendering prompts..."
 envsubst '${OUTPUT_DIR} ${FEATURE_NAME} ${OWNER_NAME}' < "$TEMPLATES_DIR/sync-prompt.md" > "$OUTPUT_DIR/sync-prompt.md"
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/drift-prompt.md" > "$OUTPUT_DIR/drift-prompt.md"
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/suggest-prompt.md" > "$OUTPUT_DIR/suggest-prompt.md"
+envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/apply-prompt.md" > "$OUTPUT_DIR/apply-prompt.md"
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/structural-scan-prompt.md" > "$OUTPUT_DIR/structural-scan-prompt.md"
 
 echo "Rendering wrapper scripts..."

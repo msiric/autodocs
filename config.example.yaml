@@ -90,6 +90,7 @@ telemetry:
 # ---------------------------------------------------------------------------
 docs:
   - name: "your-feature-guide.md"
+    repo_path: "docs/your-feature/your-feature-guide.md"  # Path within the git repo (for auto-PR)
     package_map:
       # Simple mapping: package name → doc section name
       your-feature: "Architecture"
@@ -110,8 +111,19 @@ docs:
       - test-utilities        # Shared test helpers
 
   - name: "your-telemetry-guide.md"
+    repo_path: "docs/your-feature/your-telemetry-guide.md"
     known_patterns_section: "Known Failure Patterns"
     # No package_map needed — this doc is checked for telemetry drift only
+
+# ---------------------------------------------------------------------------
+# Auto-PR creation (optional)
+# Applies CONFIDENT + VERIFIED suggestions to docs in the repo and opens a PR.
+# Requires docs to be tracked in git (repo_path field on each doc entry).
+# ---------------------------------------------------------------------------
+# auto_pr:
+#   enabled: true
+#   target_branch: "master"
+#   branch_prefix: "autodocs/"
 
 # ---------------------------------------------------------------------------
 # Metadata
