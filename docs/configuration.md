@@ -61,13 +61,13 @@ A PR is classified as **YES** if any of its changed files start with any of thes
 
 ### `relevant_pattern` (optional)
 
-Catch-all substring pattern for files not covered by `relevant_paths`.
+Catch-all substring for files not covered by `relevant_paths`. Matched as a case-insensitive substring against each file path (not glob matching).
 
 ```yaml
-relevant_pattern: "*your-feature*"
+relevant_pattern: "your-feature"
 ```
 
-A PR is classified as **MAYBE** if no file matches `relevant_paths` but a file path contains this substring (case-insensitive). Useful for catching new packages not yet in the paths list.
+A PR is classified as **MAYBE** if no file matches `relevant_paths` but a file path contains this substring. Useful for catching new packages not yet in the paths list.
 
 ### `telemetry` (optional)
 

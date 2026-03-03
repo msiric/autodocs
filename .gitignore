@@ -16,3 +16,4 @@
 !templates/*.md
 !config.example.yaml
 !examples/**/config.yaml
+.serena/

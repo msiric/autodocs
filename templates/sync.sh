@@ -14,7 +14,7 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.claude/local:$PATH"
 
 # Preemptive auth check (fail fast, don't waste an expensive call)
-if ! (cd "$REPO_DIR" && claude -p "Reply with OK" --output-format text 2>/dev/null | grep -q "OK"); then
+if ! (cd "$REPO_DIR" && claude -p "Reply with OK" --output-format text 2>/dev/null | grep -qx "OK"); then
   cat > "$STATUS_FILE" <<EOF
 status: failed
 timestamp: $TIMESTAMP
@@ -40,11 +40,9 @@ OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
   --add-dir "$OUTPUT_DIR" \
   --allowedTools "$SYNC_TOOLS" \
   --output-format text \
-  2>&1) || true
+  2>&1) && SYNC_RC=0 || SYNC_RC=$?
 
-EXIT_CODE=${PIPESTATUS[0]:-$?}
-
-if [ $EXIT_CODE -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
+if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   cat > "$STATUS_FILE" <<EOF
 status: success
 timestamp: $TIMESTAMP
@@ -58,14 +56,12 @@ EOF
       --add-dir "$OUTPUT_DIR" \
       --allowedTools "Read,Write" \
       --output-format text \
-      2>&1) || true
+      2>&1) && DRIFT_RC=0 || DRIFT_RC=$?
 
-    DRIFT_EXIT=${PIPESTATUS[0]:-$?}
-
-    if [ $DRIFT_EXIT -eq 0 ]; then
+    if [ $DRIFT_RC -eq 0 ]; then
       echo "[$TIMESTAMP] DRIFT SUCCESS" >> "$LOG_FILE"
     else
-      echo "[$TIMESTAMP] DRIFT FAILED (exit $DRIFT_EXIT)" >> "$LOG_FILE"
+      echo "[$TIMESTAMP] DRIFT FAILED (exit $DRIFT_RC)" >> "$LOG_FILE"
       echo "$DRIFT_OUTPUT" | tail -10 >> "$LOG_FILE"
     fi
   fi
@@ -73,9 +69,9 @@ else
   cat > "$STATUS_FILE" <<EOF
 status: failed
 timestamp: $TIMESTAMP
-error: Exit code $EXIT_CODE
+error: Exit code $SYNC_RC
 likely_cause: Check sync.log and sync.err.log for details.
 EOF
-  echo "[$TIMESTAMP] SYNC FAILED (exit $EXIT_CODE)" >> "$LOG_FILE"
+  echo "[$TIMESTAMP] SYNC FAILED (exit $SYNC_RC)" >> "$LOG_FILE"
   echo "$OUTPUT" | tail -20 >> "$LOG_FILE"
 fi

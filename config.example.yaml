@@ -46,7 +46,9 @@ relevant_paths:
 
 # Catch-all pattern for files not in relevant_paths but still related.
 # Matched as a substring (case-insensitive) against each file path.
-relevant_pattern: "*your-feature*"
+# Catch-all substring for files not covered by relevant_paths.
+# Matched as a case-insensitive substring against each file path (not glob).
+relevant_pattern: "your-feature"
 
 # ---------------------------------------------------------------------------
 # Telemetry via Kusto (optional)
