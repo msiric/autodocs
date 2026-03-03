@@ -124,6 +124,7 @@ docs:
 #   enabled: true
 #   target_branch: "master"
 #   branch_prefix: "autodocs/"
+#   work_item_ids: "12345"          # ADO work item ID(s) to link to each PR (optional)
 
 # ---------------------------------------------------------------------------
 # Metadata

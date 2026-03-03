@@ -81,6 +81,7 @@ Use `mcp__azure-devops__repo_create_pull_request` with:
 - `targetRefName`: `refs/heads/<auto_pr.target_branch>`
 - `title`: `docs: autodocs suggested updates — <YYYY-MM-DD>`
 - `description`: formatted summary of all applied changes (see format below)
+- `workItems`: from config `auto_pr.work_item_ids` (space-separated IDs, if configured)
 
 PR description format:
 
