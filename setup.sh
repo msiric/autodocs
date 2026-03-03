@@ -108,18 +108,20 @@ owner:
   email: "$OWNER_EMAIL"
   ado_id: "$OWNER_ADO_ID"
 
-# Add your team members here
+# Add your team members here (uncomment and edit)
+# team_members:
+#   - name: "Teammate"
+#     email: "teammate@company.com"
+#     ado_id: "00000000-..."
 team_members: []
-  # - name: "Teammate"
-  #   email: "teammate@company.com"
-  #   ado_id: "00000000-..."
 
-# Paths that indicate a PR is relevant to your feature
+# Paths that indicate a PR is relevant to your feature (uncomment and edit)
+# relevant_paths:
+#   - packages/your-feature/
 relevant_paths: []
-  # - packages/your-feature/
 
+# Catch-all substring (not glob) for files not covered by relevant_paths
 relevant_pattern: ""
-  # e.g., "your-feature" (substring match, not glob)
 
 telemetry:
   enabled: $TELEMETRY_ENABLED

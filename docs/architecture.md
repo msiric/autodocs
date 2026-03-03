@@ -39,8 +39,8 @@ autodocs-sync.sh
     |   ├── Auto-expire stale LOW alerts
     |   └── Write: drift-report.md, drift-status.md, drift-log.md
     |
-    ├── Call 3: Suggest Prompt (only if Call 2 found HIGH/CRITICAL)
-    |   ├── Read drift-report.md (which sections are flagged)
+    ├── Call 3: Suggest Prompt (only if unchecked HIGH/CRITICAL alerts exist)
+    |   ├── Read drift-status.md (unchecked HIGH/CRITICAL alerts)
     |   ├── Read flagged sections from reference docs
     |   ├── Read PR details from daily-report.md (description, files, threads)
     |   ├── Generate before/after edit suggestions
@@ -102,7 +102,7 @@ Each prompt runs as a separate Claude Code invocation with its own allowlist:
 | Inputs | config.yaml, ADO, Kusto, git | daily-report.md, config.yaml, docs | drift-report.md, daily-report.md, docs |
 | Outputs | daily-report.md, activity-log.md | drift-report.md, drift-status.md, drift-log.md | drift-suggestions.md, changelog-*.md |
 | Allowed tools | 5 ADO MCP + Kusto MCP + Bash(git) + Write | Read + Write | Read + Write |
-| Runs when | Always | Call 1 succeeded | Call 2 found HIGH/CRITICAL alerts |
+| Runs when | Always | Call 1 succeeded | Unchecked HIGH/CRITICAL alerts exist |
 | Failure impact | sync-status.md = "failed" | Logged, sync output preserved | Logged, drift output preserved |
 
 This means:

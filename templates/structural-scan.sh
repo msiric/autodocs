@@ -24,6 +24,12 @@ if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE")" -gt 102400 ]; then
   tail -50 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
 fi
 
+# Preemptive auth check
+if ! (cd "$REPO_DIR" && claude -p "Reply with OK" --output-format text 2>/dev/null | grep -qx "OK"); then
+  echo "[$TIMESTAMP] SCAN AUTH FAILED — aborting" >> "$LOG_FILE"
+  exit 1
+fi
+
 cd "$REPO_DIR"
 git fetch origin --quiet 2>/dev/null || true
 

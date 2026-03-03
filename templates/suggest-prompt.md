@@ -14,7 +14,7 @@ You are a documentation update advisor. You read drift alerts and the current do
 
 Read `${OUTPUT_DIR}/drift-status.md`. Collect all unchecked (`- [ ]`) entries with HIGH or CRITICAL confidence.
 
-Read `${OUTPUT_DIR}/changelog-*.md` files (if any exist). Note which (doc, section, PR) combinations already have changelog entries — these have already been processed.
+For each doc listed in config.docs, check if `${OUTPUT_DIR}/changelog-<doc-name-without-.md-extension>.md` exists. If so, read it. Note which (doc, section, PR) combinations already have changelog entries — these have already been processed.
 
 Remove from the collected alerts any that already have a changelog entry for the SAME (doc, section, PR). These are "already suggested" — no need to re-generate.
 

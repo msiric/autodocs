@@ -10,7 +10,10 @@
 # Exclude rendered files but keep templates and examples
 **/sync-prompt.md
 **/drift-prompt.md
+**/suggest-prompt.md
+**/structural-scan-prompt.md
 **/autodocs-sync.sh
+**/autodocs-structural-scan.sh
 **/autodocs-now
 **/config.yaml
 !templates/*.md
