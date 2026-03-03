@@ -129,11 +129,12 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
         fi
       fi
 
-      # Call 4: Apply suggestions as PR (only if config enables auto_pr and suggestions are applicable)
+      # Call 4: Apply suggestions as PR (if auto_pr enabled and suggestions exist)
+      # The apply prompt handles filtering — it applies CONFIDENT+VERIFIED+AGREED edits
+      # and includes REVIEW/DISPUTED/UNMATCHED suggestions in the PR description
       if [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
          && grep -q "auto_pr" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
-         && grep -q "Verified: YES" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null \
-         && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
+         && [ "$(grep -c 'suggestion_count: 0' "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null)" -eq 0 ]; then
 
         APPLY_TOOLS="Read,Edit,Write,Bash(git:*)"
         APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_pull_request"
