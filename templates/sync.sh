@@ -97,6 +97,9 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
     if [ $SUGGEST_RC -eq 0 ]; then
       SUGGEST_STATUS="success"
       echo "[$TIMESTAMP] SUGGEST SUCCESS" >> "$LOG_FILE"
+      if grep -q "Verified: NO" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
+        echo "[$TIMESTAMP] SUGGEST WARNING: some suggestions are UNVERIFIED" >> "$LOG_FILE"
+      fi
     else
       SUGGEST_STATUS="failed"
       echo "[$TIMESTAMP] SUGGEST FAILED (exit $SUGGEST_RC)" >> "$LOG_FILE"

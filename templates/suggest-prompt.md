@@ -54,17 +54,24 @@ For each remaining alert from Step 1:
 4. Identify the PR(s) that triggered the alert.
 5. If the PR is in today's daily-report.md, get its Description and Files fields. If not, use the PR title from the alert entry.
 
-Now compare the section content against the PR changes and generate a suggestion:
+Now compare the section content against the PR changes. Determine which operation is needed:
 
-- **CURRENT**: Quote the specific paragraph(s) in the section that relate to the PR's changes. Keep the quote short — just the relevant lines, not the entire section.
-- **SUGGESTED**: Write the updated paragraph(s). Preserve the doc's existing tone and style. Make the minimum change needed — do not rewrite surrounding text.
+**REPLACE** — existing text in the doc needs to change (renamed function, changed behavior, outdated description).
+**INSERT AFTER** — new content needs to be added (missing table row, new subsection, new bullet point). Use this when the doc is missing information, not when existing text is wrong.
+
+For each suggestion, generate:
+
+- **FIND**: The EXACT text from the doc that needs to change (for REPLACE) or the line to insert after (for INSERT AFTER). This MUST be copied verbatim from the doc — do not paraphrase, reformat, or summarize. Keep it as short as possible while being unique (a single line or table row is ideal).
+- **REPLACE WITH** or **INSERT AFTER**: The new text. Preserve the doc's existing tone, style, and formatting. Make the minimum change needed.
 - **REASONING**: One sentence explaining what changed and why.
 
-Rate each suggestion:
+**Self-verification:** After generating each FIND block, re-read the doc section and verify the FIND text appears as an exact substring. If it does, set **Verified: YES**. If not, adjust the FIND text to match the actual doc. If you still cannot match it exactly, set **Verified: NO** and note the discrepancy.
+
+Rate each suggestion's confidence:
 - **CONFIDENT**: Clear factual update — a function was renamed, a parameter was added, behavior was changed and the doc describes the old behavior.
 - **REVIEW**: The section may or may not need updating — the PR touches related code but the doc's description might still be accurate.
 
-If you cannot determine what specifically needs updating (e.g., the PR files don't clearly relate to the section content), generate a REVIEW suggestion with the note: "PR touches related code but the specific documentation impact is unclear. Manual review recommended."
+If you cannot determine what specifically needs updating, generate a REVIEW suggestion with the note: "PR touches related code but the specific documentation impact is unclear. Manual review recommended."
 
 ## Step 4: Generate Changelog Entries
 
@@ -83,6 +90,7 @@ Write to `${OUTPUT_DIR}/drift-suggestions.md` (overwrite entirely).
 ---
 date: YYYY-MM-DD
 suggestion_count: <number of suggestions>
+verified: <count of YES>/<total>
 ---
 # Suggested Updates — YYYY-MM-DD
 
@@ -90,14 +98,28 @@ suggestion_count: <number of suggestions>
 **Triggered by:** PR #<id> "<title>"
 **Confidence:** CONFIDENT | REVIEW
 
-### Current (from doc):
-> <quoted current text — the specific lines that need updating>
+### FIND (in <doc name>, section "<Section Name>"):
+> <exact text from the doc — must match verbatim>
 
-### Suggested:
-> <the updated text — minimum change needed>
+### REPLACE WITH:
+> <the updated text>
+
+**Verified:** YES — FIND text confirmed in doc | NO — <reason>
 
 ### Reasoning:
-<one sentence: what changed and why this update is needed>
+<one sentence: what changed and why>
+
+---
+
+(For INSERT operations, use this format instead:)
+
+### FIND (anchor — insert after this line):
+> <existing line in the doc — must match verbatim>
+
+### INSERT AFTER:
+> <new text to add after the anchor>
+
+**Verified:** YES — anchor confirmed in doc | NO — <reason>
 
 ---
 
