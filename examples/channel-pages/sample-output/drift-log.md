@@ -1,5 +1,8 @@
 # Documentation Drift Log
 
+## 2026-03-03
+- telemetry-guide.md "Known Failure Patterns" ← Kusto anomaly (HIGH): 1 new error string "0x8e4" not in known patterns; 2 previously flagged patterns persist
+
 ## 2026-03-02
 - channel-pages.md "Error Handling" ← PR #1477230 (HIGH): Modified components-fluid error surfacing from parent exceptions
 - channel-pages.md "Server-Side Resolver" ← PR #1477230, #1482424 (HIGH): Modified data-resolvers-platform-tabs (error surfacing, CDL priority elevation)

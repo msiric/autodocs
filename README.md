@@ -2,7 +2,7 @@
 
 Automated documentation drift detection using Claude Code + Azure DevOps.
 
-When your team merges PRs that change code described in your documentation, autodocs detects which doc sections may be stale and generates structured alerts — so you review docs that matter, not everything.
+When your team merges PRs that change code described in your documentation, autodocs detects which doc sections are stale, generates suggested updates, and maintains a changelog of why things changed.
 
 ## How it works
 
@@ -10,39 +10,54 @@ When your team merges PRs that change code described in your documentation, auto
 Your repo (git)          Azure DevOps              Kusto (optional)
      |                       |                          |
      |   git diff-tree       |   merged PRs             |   telemetry
-     |   (changed files)     |   (team activity)        |   (error patterns)
+     |   (changed files)     |   (+ descriptions,       |   (error patterns)
+     |                       |      review threads)      |
      v                       v                          v
   +---------------------------------------------------------+
   |              Claude Code (headless mode)                 |
   |                                                         |
-  |  Call 1: Sync                                           |
-  |  - Fetch merged PRs from ADO                            |
+  |  Call 1: Sync (daily)                                   |
+  |  - Fetch merged PRs from ADO (with descriptions)        |
   |  - Get changed files via git diff-tree (local repo)     |
+  |  - Fetch PR review threads for relevant PRs             |
   |  - Classify PRs by path matching                        |
   |  - Run predefined Kusto queries (if configured)         |
   |  - Write: daily-report.md, activity-log.md              |
   |                                                         |
-  |  Call 2: Drift Detection                                |
+  |  Call 2: Drift Detection (daily)                        |
   |  - Read sync output + your doc's file index             |
   |  - Map changed packages to doc sections                 |
   |  - Flag new error patterns not in known list            |
   |  - Detect unmapped files (new code not in docs)         |
   |  - Write: drift-report.md, drift-status.md, drift-log  |
+  |                                                         |
+  |  Call 3: Suggest + Changelog (daily, if drift found)    |
+  |  - Read flagged sections from your actual docs          |
+  |  - Generate before/after edit suggestions               |
+  |  - Write changelog entries capturing WHY things changed |
+  |  - Write: drift-suggestions.md, changelog-<doc>.md      |
+  |                                                         |
+  |  Weekly: Structural Scan (Saturday)                     |
+  |  - Verify every file referenced in docs still exists    |
+  |  - Find undocumented files in feature paths             |
+  |  - Write: structural-report.md                          |
   +---------------------------------------------------------+
-                          |
-                          v
-                    Output files
-              (markdown, YAML frontmatter)
 ```
 
-## Key innovation: `git diff-tree`
+## Key innovations
 
-The ADO MCP doesn't expose changed files for a PR. autodocs works around this by extracting the merge commit SHA from the PR response, then running `git diff-tree` against the local repo to get the exact file list. This enables precise, file-level drift detection that maps changed code to specific documentation sections.
+**`git diff-tree` for file-level precision.** The ADO MCP doesn't expose changed files for a PR. autodocs extracts the merge commit SHA from the PR response, then runs `git diff-tree` against the local repo. This enables precise, package-to-section drift detection.
+
+**Suggested updates, not auto-edits.** autodocs reads the flagged doc section and the PR changes, then generates a before/after edit suggestion. The human reviews and applies. This gives 90% of the productivity benefit of auto-editing with 0% of the risk.
+
+**Changelog with "why."** Most documentation tells you WHAT the system does today. autodocs also captures WHY things changed — from PR descriptions and review threads. Six months later, when nobody remembers why `handleError` became `classifyError`, the changelog does.
 
 ## What it produces
 
+### Daily output
+
 **daily-report.md** — Structured daily summary with YAML frontmatter:
-- Team PRs (classified by feature relevance, with full file lists)
+- Team PRs with descriptions, file lists, and review thread summaries
 - Owner's activity (reviews, authored PRs)
 - Telemetry metrics (reliability, error breakdown, anomalies)
 
@@ -51,19 +66,34 @@ The ADO MCP doesn't expose changed files for a PR. autodocs works around this by
 - Confidence levels (CRITICAL / HIGH / LOW)
 - New error patterns not in your known patterns list
 
+**drift-suggestions.md** — Before/after edit suggestions:
+- Quotes the current doc text and proposes the update
+- Rated CONFIDENT (clear factual change) or REVIEW (needs human judgment)
+- Only generated when HIGH or CRITICAL drift is detected
+
+**changelog-\<doc\>.md** — Per-doc change history, organized by section:
+- What changed, why it changed (from PR descriptions)
+- Reviewer context (from PR review threads)
+- Permanent record — never trimmed
+
 **drift-status.md** — Active alert tracker (Obsidian-compatible checkboxes):
 - Check off alerts you've resolved
 - LOW alerts auto-expire after 7 days
 - Deduplicates across days
 
-**drift-log.md** — Append-only history (30-day retention)
+### Weekly output
+
+**structural-report.md** — Documentation structural audit:
+- Files referenced in docs that no longer exist in the repo
+- Files in feature paths that aren't documented
+- Catches drift that predates autodocs
 
 ## Quick start
 
 ### Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- [Azure DevOps MCP](https://github.com/nicepkg/azure-devops-mcp) configured in your project's `.claude/settings.json`
+- [Azure DevOps MCP](https://github.com/microsoft/azure-devops-mcp) configured in your project's `.claude/settings.json`
 - Git repo checked out locally
 - (Optional) [Kusto MCP](https://github.com/nicepkg/kusto-mcp) for telemetry monitoring
 
@@ -79,7 +109,7 @@ The setup wizard will:
 1. Ask for your repo path, output directory, ADO details
 2. Resolve your repository GUID
 3. Generate a config template for you to customize
-4. Render the prompts and wrapper script
+4. Render all prompts, wrapper scripts, and schedules
 
 ### Configure
 
@@ -107,19 +137,21 @@ docs:
 ### Run
 
 ```bash
-# Manual run
+# Manual run (full daily chain: sync → drift → suggest)
 autodocs-now
 
-# Or run the sync directly
-./autodocs-sync.sh
+# Structural scan (usually weekly, can run manually)
+autodocs-structural-scan.sh
 ```
 
 ### Schedule
 
-autodocs generates a launchd plist (macOS) for daily automated runs:
-
 ```bash
+# Daily sync + drift + suggest (macOS)
 launchctl load ~/Library/LaunchAgents/com.autodocs.sync.plist
+
+# Weekly structural scan (macOS)
+launchctl load ~/Library/LaunchAgents/com.autodocs.structural-scan.plist
 ```
 
 ## Configuration reference
@@ -132,13 +164,14 @@ See [docs/architecture.md](docs/architecture.md) for the data flow, security mod
 
 ## Example: Channel Pages (Loop in Teams)
 
-The [examples/channel-pages/](examples/channel-pages/) directory contains a complete worked example:
-- Config for a 9-person team working on Microsoft Teams Channel Pages
-- 3 predefined Kusto queries for feature reliability monitoring
+The [examples/channel-pages/](examples/channel-pages/) directory contains a complete worked example from a 9-person team at Microsoft working on Teams Channel Pages:
+- Config with team members, 11 relevant path prefixes, 3 Kusto queries
 - Package-to-section mappings for a 19-section architecture doc
-- Sample output files showing real drift alerts
+- Sample output: daily report, drift alerts, suggested updates, changelog
 
-## How drift detection works
+## How it works in detail
+
+### Drift detection
 
 1. The daily sync writes `daily-report.md` with PR data including changed file paths
 2. The drift prompt reads the PR file lists and your doc's structure
@@ -150,21 +183,36 @@ The [examples/channel-pages/](examples/channel-pages/) directory contains a comp
 
 Alerts are grouped by section (not per-file), deduplicated across days, and auto-expire if unresolved.
 
+### Suggested updates
+
+When drift is detected, autodocs reads the flagged doc section and the PR changes, then generates:
+- **Before/after diff** — the current text and the suggested replacement
+- **Confidence rating** — CONFIDENT for clear factual changes, REVIEW for ambiguous ones
+- **Changelog entry** — what changed, why (from PR description), and reviewer context (from PR threads)
+
+### Structural scan
+
+Once a week, autodocs audits your docs against the actual repo:
+- Every file path mentioned in a doc → verified via `git ls-files`
+- Every file under feature-relevant paths → checked if documented
+- Missing files (deleted/renamed) and undocumented files are reported
+
 ## Design principles
 
-- **Detect, never edit.** autodocs flags stale sections — it never modifies your documentation.
+- **Detect, never edit.** autodocs flags stale sections and suggests updates — it never modifies your documentation.
 - **Deterministic classification.** PR relevance is determined by file path matching, not LLM inference.
 - **Graceful degradation.** If ADO fails, telemetry still runs (and vice versa). If file paths aren't available, LOW alerts are generated instead of silence.
-- **Two-call isolation.** The sync and drift prompts run independently. Drift failure can't corrupt sync output.
-- **Config-driven.** Team members, paths, queries, and mappings live in config. Prompts are generic.
+- **Three-call isolation.** Sync, drift, and suggest run as independent Claude Code calls. Each can fail without corrupting the others.
+- **Config-driven.** Team members, paths, queries, and mappings live in config. Prompts are generic templates.
 
 ## Security
 
-- **Read-only ADO access.** Only 4 ADO MCP tools are allowed (list PRs, get PR details, search code, get repo). No write operations.
+- **Read-only ADO access.** Only 5 read-only ADO MCP tools are allowed. No write operations (no PR creation, no work item updates).
 - **No PII in output.** Prompts explicitly prohibit including internal URLs, stack traces, or user identifiers.
 - **Kusto queries are predefined.** The LLM copies queries verbatim from config — it never generates KQL.
 - **Write sandbox.** Each prompt can only write to its specific output files.
-- **Git operations scoped.** Only `git diff-tree` and `git fetch` are used — no modifications to the repo.
+- **Git operations scoped.** Only `git diff-tree`, `git ls-files`, and `git fetch` are used — no modifications to the repo.
+- **Suggestions are advisory.** The suggest prompt writes to its own files. It never touches your documentation.
 
 ## License
 
