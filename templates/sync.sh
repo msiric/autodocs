@@ -32,6 +32,7 @@ if ! (cd "$REPO_DIR" && claude -p "Reply with OK" --output-format text 2>/dev/nu
 status: failed
 drift: skipped
 suggest: skipped
+verify: skipped
 apply: skipped
 timestamp: $TIMESTAMP
 error: Claude Code auth expired
@@ -49,6 +50,7 @@ git fetch origin --quiet 2>/dev/null || echo "[$TIMESTAMP] git fetch failed (non
 SYNC_STATUS="failed"
 DRIFT_STATUS="skipped"
 SUGGEST_STATUS="skipped"
+VERIFY_STATUS="skipped"
 APPLY_STATUS="skipped"
 
 # Call 1: Main sync (PRs + telemetry)
@@ -104,6 +106,29 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
         echo "[$TIMESTAMP] SUGGEST WARNING: some suggestions are UNVERIFIED" >> "$LOG_FILE"
       fi
 
+      # Call 3v: Verify suggestions with variant reasoning (multi-model verification)
+      if grep -q "multi_model" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
+         && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
+
+        VERIFY_VARIATION="IMPORTANT: This is a verification run. 1. Write all suggestions to ${OUTPUT_DIR}/drift-suggestions-verify.md instead of drift-suggestions.md. 2. Do NOT write any changelog files — only write the suggestions file. 3. Before generating each suggestion, re-read the full doc section and list the 3 most important facts that the PR changes might affect. Then generate the FIND/REPLACE suggestion based on those facts."
+
+        VERIFY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
+          --append-system-prompt "$VERIFY_VARIATION" \
+          --model opus \
+          --add-dir "$OUTPUT_DIR" \
+          --allowedTools "Read,Write" \
+          --output-format text \
+          2>&1) && VERIFY_RC=0 || VERIFY_RC=$?
+
+        if [ $VERIFY_RC -eq 0 ]; then
+          VERIFY_STATUS="success"
+          echo "[$TIMESTAMP] VERIFY SUCCESS" >> "$LOG_FILE"
+        else
+          VERIFY_STATUS="failed"
+          echo "[$TIMESTAMP] VERIFY FAILED (exit $VERIFY_RC)" >> "$LOG_FILE"
+        fi
+      fi
+
       # Call 4: Apply suggestions as PR (only if config enables auto_pr and suggestions are applicable)
       if [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
          && grep -q "auto_pr" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
@@ -146,6 +171,7 @@ cat > "$STATUS_FILE" <<EOF
 status: $SYNC_STATUS
 drift: $DRIFT_STATUS
 suggest: $SUGGEST_STATUS
+verify: $VERIFY_STATUS
 apply: $APPLY_STATUS
 timestamp: $TIMESTAMP
 EOF

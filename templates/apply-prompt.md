@@ -21,7 +21,19 @@ Filter suggestions to only those with BOTH:
 - **Confidence: CONFIDENT**
 - **Verified: YES**
 
-If no suggestions pass the filter, stop. Do not create a branch or PR.
+**Multi-model verification (if available):**
+Check if `${OUTPUT_DIR}/drift-suggestions-verify.md` exists. If so, read it. This file contains suggestions generated independently through a different reasoning path.
+
+For each CONFIDENT + Verified: YES suggestion in drift-suggestions.md, check if drift-suggestions-verify.md has a suggestion for the SAME (doc, section):
+- If the verify file has a matching suggestion AND the FIND targets the same text AND the REPLACE/INSERT content makes the same factual claims → mark as **AGREED**. Apply this suggestion.
+- If the verify file has a suggestion for the same section but with DIFFERENT factual claims in the REPLACE/INSERT text → mark as **DISPUTED**. Skip this suggestion.
+- If the verify file has no suggestion for this section → mark as **UNMATCHED**. Skip this suggestion.
+
+Only apply suggestions marked AGREED. Note disputed and unmatched suggestions in the PR description as "skipped — requires manual review."
+
+If `drift-suggestions-verify.md` does not exist (multi-model not enabled or verify failed), apply all CONFIDENT + Verified: YES suggestions as before.
+
+If no suggestions pass the filter (or all are disputed/unmatched), stop. Do not create a branch or PR.
 
 ## Step 2: Apply Changes
 

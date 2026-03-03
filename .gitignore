@@ -12,6 +12,7 @@
 **/drift-prompt.md
 **/suggest-prompt.md
 **/apply-prompt.md
+**/drift-suggestions-verify.md
 **/structural-scan-prompt.md
 **/autodocs-sync.sh
 **/autodocs-structural-scan.sh

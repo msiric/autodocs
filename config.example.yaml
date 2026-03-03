@@ -127,6 +127,15 @@ docs:
 #   work_item_ids: "12345"          # ADO work item ID(s) to link to each PR (optional)
 
 # ---------------------------------------------------------------------------
+# Multi-model verification (optional)
+# Runs the suggest prompt twice with different reasoning paths (same model).
+# Only suggestions where both runs agree are applied via auto-PR.
+# Suggestions that disagree stay in drift-suggestions.md for manual review.
+# ---------------------------------------------------------------------------
+# multi_model:
+#   enabled: true
+
+# ---------------------------------------------------------------------------
 # Metadata
 # ---------------------------------------------------------------------------
 last_verified: "2026-01-01"  # Update when you review the config for accuracy
