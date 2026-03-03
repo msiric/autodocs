@@ -2,7 +2,7 @@
 
 ## Overview
 
-autodocs runs as two sequential Claude Code headless calls, triggered daily by launchd (macOS) or cron (Linux). Each call is independent — if drift detection fails, the sync output is preserved.
+autodocs runs as three sequential Claude Code headless calls daily, plus a weekly structural scan. Each call is independent — downstream failures can't corrupt upstream output.
 
 ```
 launchd/cron (daily)
@@ -18,7 +18,8 @@ autodocs-sync.sh
     ├── Call 1: Sync Prompt
     |   ├── Read config.yaml
     |   ├── ADO MCP: list completed PRs
-    |   ├── ADO MCP: get PR details (merge commit SHA)
+    |   ├── ADO MCP: get PR details (merge commit SHA, description)
+    |   ├── ADO MCP: get PR review threads (for relevant PRs)
     |   ├── git diff-tree: get changed files per PR
     |   ├── Classify PRs by path matching
     |   ├── Extract owner's activity
@@ -38,7 +39,25 @@ autodocs-sync.sh
     |   ├── Auto-expire stale LOW alerts
     |   └── Write: drift-report.md, drift-status.md, drift-log.md
     |
-    └── Write sync-status.md ("success" or "failed")
+    ├── Call 3: Suggest Prompt (only if Call 2 found HIGH/CRITICAL)
+    |   ├── Read drift-report.md (which sections are flagged)
+    |   ├── Read flagged sections from reference docs
+    |   ├── Read PR details from daily-report.md (description, files, threads)
+    |   ├── Generate before/after edit suggestions
+    |   ├── Generate changelog entries (what changed + why)
+    |   └── Write: drift-suggestions.md, changelog-<doc>.md
+    |
+    └── Write sync-status.md (status + drift + suggest)
+
+launchd/cron (weekly, Saturday)
+    |
+    v
+autodocs-structural-scan.sh
+    |
+    ├── Read reference docs, extract all file paths
+    ├── git ls-files: verify each file exists
+    ├── git ls-files: find undocumented files in feature paths
+    └── Write: structural-report.md
 ```
 
 ## The git diff-tree Innovation
@@ -73,23 +92,26 @@ This requires:
 
 The approach works for all merge strategies (squash, merge commit, rebase) because `lastMergeCommit` always points to the final commit on the target branch.
 
-## Two-Call Isolation
+## Three-Call Isolation
 
-The sync and drift prompts run as separate Claude Code invocations:
+Each prompt runs as a separate Claude Code invocation with its own allowlist:
 
-| Property | Call 1: Sync | Call 2: Drift |
-|----------|-------------|---------------|
-| Purpose | Fetch data from ADO/Kusto | Analyze sync output for drift |
-| Inputs | config.yaml, ADO, Kusto, git | daily-report.md, config.yaml, docs |
-| Outputs | daily-report.md, activity-log.md | drift-report.md, drift-status.md, drift-log.md |
-| Allowed tools | 4 ADO MCP + Kusto MCP + Bash(git) + Write | Read + Write |
-| Failure impact | sync-status.md = "failed" | Logged, sync output preserved |
-| Can break the other? | No | No |
+| Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest |
+|----------|-------------|---------------|-----------------|
+| Purpose | Fetch data from ADO/Kusto | Detect stale doc sections | Generate edit suggestions + changelog |
+| Inputs | config.yaml, ADO, Kusto, git | daily-report.md, config.yaml, docs | drift-report.md, daily-report.md, docs |
+| Outputs | daily-report.md, activity-log.md | drift-report.md, drift-status.md, drift-log.md | drift-suggestions.md, changelog-*.md |
+| Allowed tools | 5 ADO MCP + Kusto MCP + Bash(git) + Write | Read + Write | Read + Write |
+| Runs when | Always | Call 1 succeeded | Call 2 found HIGH/CRITICAL alerts |
+| Failure impact | sync-status.md = "failed" | Logged, sync output preserved | Logged, drift output preserved |
 
 This means:
-- Iterating on drift detection doesn't risk breaking the sync
-- Each prompt can be debugged independently
-- Token budgets are independent (~30K sync, ~10K drift)
+- Each prompt can fail without corrupting the others
+- Each can be debugged independently
+- Token budgets are independent (~35K sync, ~10K drift, ~40K suggest)
+- Call 3 only runs when there's work to do (skipped on clean days)
+
+The weekly structural scan runs as a completely separate job with its own wrapper and schedule.
 
 ## Drift Detection Signals
 
@@ -134,9 +156,10 @@ drift-status.md: - [ ] 2026-03-02 | doc | section | PR #123 | HIGH
 
 ### Read-only ADO access
 
-Only 4 ADO tools are in the allowlist:
+Only 5 read-only ADO tools are in the allowlist:
 - `repo_list_pull_requests_by_repo_or_project` — list merged PRs
 - `repo_get_pull_request_by_id` — get PR details/merge commit
+- `repo_list_pull_request_threads` — get PR review comments
 - `search_code` — search repo (optional, for edge cases)
 - `repo_get_repo_by_name_or_id` — resolve repo GUID (setup only)
 
@@ -153,11 +176,16 @@ The LLM never generates KQL. Queries are defined in config and copied verbatim. 
 
 Each prompt can only write to its specific output files (enforced by the prompt's Rules section). The drift prompt cannot modify reference docs.
 
+### Suggestions are advisory
+
+The suggest prompt writes to `drift-suggestions.md` and `changelog-*.md`. It never modifies reference documentation. Suggestions include before/after diffs and confidence ratings — the human decides whether to apply them.
+
 ### Git scope
 
-Only two git operations are used:
+Only three git operations are used:
 - `git fetch origin` — update remote refs (read-only)
 - `git diff-tree` — list changed files for a commit (read-only)
+- `git ls-files` — verify file existence for structural scan (read-only)
 
 No modifications to the working tree, index, or branches.
 

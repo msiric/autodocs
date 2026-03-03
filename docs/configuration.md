@@ -169,12 +169,15 @@ autodocs generates these files in the output directory:
 
 | File | Written by | Frequency | Description |
 |------|-----------|-----------|-------------|
-| `daily-report.md` | Sync | Overwritten daily | PR summary, telemetry, anomalies |
+| `daily-report.md` | Sync | Overwritten daily | PR summary (with descriptions, files, threads), telemetry, anomalies |
 | `activity-log.md` | Sync | Appended daily | Owner's activity history (14-day retention) |
 | `drift-report.md` | Drift | Overwritten daily | Today's drift alerts + active unresolved |
 | `drift-status.md` | Drift | Rewritten daily | Checkbox list (Obsidian-compatible) |
 | `drift-log.md` | Drift | Appended daily | Drift alert history (30-day retention) |
-| `sync-status.md` | Wrapper | Overwritten daily | success/failed + timestamp |
+| `drift-suggestions.md` | Suggest | Overwritten daily | Before/after edit suggestions (only when HIGH/CRITICAL drift) |
+| `changelog-<doc>.md` | Suggest | Appended daily | Per-doc change history organized by section (permanent, never trimmed) |
+| `structural-report.md` | Scan | Overwritten weekly | Missing files + undocumented files audit |
+| `sync-status.md` | Wrapper | Overwritten daily | status + drift + suggest + timestamp |
 | `sync.log` | Wrapper | Appended | One-line log per run |
 
 ## Minimal Config (sync only, no telemetry, no drift)
