@@ -37,11 +37,15 @@ Your repo (git)          Azure DevOps              Kusto (optional)
   |  - Write changelog entries capturing WHY things changed |
   |  - Write: drift-suggestions.md, changelog-<doc>.md      |
   |                                                         |
-  |  Call 4: Apply as PR (optional, if suggestions found)   |
-  |  - Apply CONFIDENT + VERIFIED suggestions to doc files  |
+  |  Call 3v: Verify (optional, multi-model verification)   |
+  |  - Re-run suggest with variant reasoning path           |
+  |  - Write: drift-suggestions-verify.md                   |
+  |                                                         |
+  |  Call 4: Apply as PR (optional, if suggestions agreed)  |
+  |  - Compare primary + verify suggestions                 |
+  |  - Apply only AGREED suggestions to doc files           |
   |  - Create branch, commit changes + changelog            |
   |  - Open pull request in ADO (with work item link)       |
-  |  - Human reviews and merges                             |
   |                                                         |
   |  Weekly: Structural Scan (Saturday)                     |
   |  - Verify every file referenced in docs still exists    |
@@ -200,11 +204,14 @@ When drift is detected, autodocs reads the flagged doc section and the PR change
 - **Confidence rating** — CONFIDENT for clear factual changes, REVIEW for ambiguous ones
 - **Changelog entry** — what changed, why (from PR description), and reviewer context (from PR threads)
 
+If `multi_model` is enabled, autodocs runs the suggest prompt a second time with a variant reasoning path (chain-of-thought variation). Only suggestions where both runs agree on the factual claims are applied via auto-PR. Disputed suggestions stay in drift-suggestions.md for manual review.
+
 If `auto_pr` is enabled in config, autodocs automatically:
-1. Applies CONFIDENT + VERIFIED suggestions to the doc files in the repo
-2. Includes the changelog alongside the edits
-3. Creates a branch and opens a PR in ADO (with work item linking)
-4. The human reviews and merges — standard code review workflow
+1. Compares primary and verify suggestions (if multi-model enabled)
+2. Applies AGREED (or all CONFIDENT+VERIFIED if single-model) suggestions to doc files
+3. Includes the changelog alongside the edits
+4. Creates a branch and opens a PR in ADO (with work item linking)
+5. The human reviews and merges — standard code review workflow
 
 ### Structural scan
 
@@ -218,7 +225,7 @@ Once a week, autodocs audits your docs against the actual repo:
 - **Suggest, never force.** autodocs generates verified FIND/REPLACE suggestions and optionally opens PRs — but a human always reviews before changes reach the main branch.
 - **Deterministic classification.** PR relevance is determined by file path matching, not LLM inference.
 - **Graceful degradation.** If ADO fails, telemetry still runs (and vice versa). If file paths aren't available, LOW alerts are generated instead of silence.
-- **Four-call isolation.** Sync, drift, suggest, and apply run as independent Claude Code calls. Each can fail without corrupting the others.
+- **Independent call isolation.** Sync, drift, suggest, verify, and apply run as independent Claude Code calls. Each can fail without corrupting the others.
 - **Config-driven.** Team members, paths, queries, and mappings live in config. Prompts are generic templates.
 
 ## Security
@@ -229,6 +236,7 @@ Once a week, autodocs audits your docs against the actual repo:
 - **Write sandbox.** Each prompt can only write to its specific output files. The apply prompt can additionally write to doc files in the repo (gated by `auto_pr` config).
 - **Git operations scoped.** Read operations: `git diff-tree`, `git ls-files`, `git fetch`. Write operations (Call 4 only): `git checkout -b`, `git add`, `git commit`, `git push` — always to a feature branch, never to the target branch.
 - **Self-verified suggestions.** Each FIND block is confirmed to exist verbatim in the doc before being applied. Unverified suggestions are skipped.
+- **Multi-model verification.** When enabled, suggestions are independently generated through two different reasoning paths. Only suggestions where both agree are auto-applied. Disputed suggestions require manual review.
 - **Human reviews all changes.** Auto-PRs go through standard ADO review workflow. Branch protection rules apply.
 
 ## License

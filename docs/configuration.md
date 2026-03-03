@@ -177,6 +177,17 @@ auto_pr:
 
 Requires `repo_path` on each doc entry (see docs section above) so the apply prompt knows where to find the files in the repo.
 
+### `multi_model` (optional)
+
+Enables multi-model verification for suggestions. When enabled, the suggest prompt runs a second time with a chain-of-thought reasoning variation (same model, different reasoning path). Only suggestions where both runs agree are applied via auto-PR. Disputed suggestions stay in drift-suggestions.md for manual review.
+
+```yaml
+multi_model:
+  enabled: true
+```
+
+Based on [ACL 2025 research](https://aclanthology.org/2025.findings-acl.606.pdf) showing simple majority voting captures most gains from multi-agent debate, and [Anthropic's Best-of-N verification recommendation](https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations).
+
 ### `last_verified` (optional)
 
 Date when the config was last reviewed for accuracy. Informational only.
@@ -199,7 +210,8 @@ autodocs generates these files in the output directory:
 | `drift-suggestions.md` | Suggest | Overwritten daily | FIND/REPLACE edit suggestions, self-verified (only when HIGH/CRITICAL drift) |
 | `changelog-<doc>.md` | Suggest | Appended daily | Per-doc change history organized by section (permanent, never trimmed) |
 | `structural-report.md` | Scan | Overwritten weekly | Missing files + undocumented files audit |
-| `sync-status.md` | Wrapper | Overwritten daily | status + drift + suggest + apply + timestamp |
+| `drift-suggestions-verify.md` | Verify | Overwritten daily | Independent verification suggestions (only when multi_model enabled) |
+| `sync-status.md` | Wrapper | Overwritten daily | status + drift + suggest + verify + apply + timestamp |
 | ADO pull request | Apply | When CONFIDENT+VERIFIED suggestions exist | Branch with doc edits + changelog, linked to work items |
 | `sync.log` | Wrapper | Appended | One-line log per run |
 
