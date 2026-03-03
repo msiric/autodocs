@@ -50,6 +50,7 @@ DRIFT_STATUS="skipped"
 # Call 1: Main sync (PRs + telemetry)
 SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
 SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_get_pull_request_by_id"
+SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_list_pull_request_threads"
 SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__search_code"
 SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
 SYNC_TOOLS="$SYNC_TOOLS,Bash(git:*),Write"
@@ -82,6 +83,26 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       echo "$DRIFT_OUTPUT" | tail -10 >> "$LOG_FILE"
     fi
   fi
+
+  # Call 3: Suggested updates + changelog (only if drift found actionable alerts)
+  SUGGEST_STATUS="skipped"
+  if [ "$DRIFT_STATUS" = "success" ] && [ -f "$OUTPUT_DIR/suggest-prompt.md" ] \
+     && grep -qE "HIGH|CRITICAL" "$OUTPUT_DIR/drift-report.md" 2>/dev/null; then
+    SUGGEST_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
+      --add-dir "$OUTPUT_DIR" \
+      --allowedTools "Read,Write" \
+      --output-format text \
+      2>&1) && SUGGEST_RC=0 || SUGGEST_RC=$?
+
+    if [ $SUGGEST_RC -eq 0 ]; then
+      SUGGEST_STATUS="success"
+      echo "[$TIMESTAMP] SUGGEST SUCCESS" >> "$LOG_FILE"
+    else
+      SUGGEST_STATUS="failed"
+      echo "[$TIMESTAMP] SUGGEST FAILED (exit $SUGGEST_RC)" >> "$LOG_FILE"
+      echo "$SUGGEST_OUTPUT" | tail -10 >> "$LOG_FILE"
+    fi
+  fi
 else
   echo "[$TIMESTAMP] SYNC FAILED (exit $SYNC_RC)" >> "$LOG_FILE"
   echo "$OUTPUT" | tail -20 >> "$LOG_FILE"
@@ -91,5 +112,6 @@ fi
 cat > "$STATUS_FILE" <<EOF
 status: $SYNC_STATUS
 drift: $DRIFT_STATUS
+suggest: ${SUGGEST_STATUS:-skipped}
 timestamp: $TIMESTAMP
 EOF

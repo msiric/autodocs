@@ -145,10 +145,14 @@ export OUTPUT_DIR REPO_DIR FEATURE_NAME OWNER_NAME SCHEDULE_HOUR
 echo "Rendering prompts..."
 envsubst '${OUTPUT_DIR} ${FEATURE_NAME} ${OWNER_NAME}' < "$TEMPLATES_DIR/sync-prompt.md" > "$OUTPUT_DIR/sync-prompt.md"
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/drift-prompt.md" > "$OUTPUT_DIR/drift-prompt.md"
+envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/suggest-prompt.md" > "$OUTPUT_DIR/suggest-prompt.md"
+envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/structural-scan-prompt.md" > "$OUTPUT_DIR/structural-scan-prompt.md"
 
-echo "Rendering wrapper script..."
+echo "Rendering wrapper scripts..."
 envsubst '${OUTPUT_DIR} ${REPO_DIR}' < "$TEMPLATES_DIR/sync.sh" > "$OUTPUT_DIR/autodocs-sync.sh"
 chmod +x "$OUTPUT_DIR/autodocs-sync.sh"
+envsubst '${OUTPUT_DIR} ${REPO_DIR}' < "$TEMPLATES_DIR/structural-scan.sh" > "$OUTPUT_DIR/autodocs-structural-scan.sh"
+chmod +x "$OUTPUT_DIR/autodocs-structural-scan.sh"
 
 echo "Rendering manual trigger..."
 cat > "$OUTPUT_DIR/autodocs-now" <<EOF
@@ -166,13 +170,17 @@ if [[ "$(uname)" == "Darwin" ]]; then
 
   envsubst '${OUTPUT_DIR} ${SCHEDULE_HOUR}' < "$TEMPLATES_DIR/com.autodocs.sync.plist" > "$PLIST_FILE"
 
+  SCAN_PLIST="$PLIST_DIR/com.autodocs.structural-scan.plist"
+  envsubst '${OUTPUT_DIR} ${SCHEDULE_HOUR}' < "$TEMPLATES_DIR/com.autodocs.structural-scan.plist" > "$SCAN_PLIST"
+
   echo ""
-  echo "launchd plist written to $PLIST_FILE"
-  echo "To activate: launchctl load $PLIST_FILE"
+  echo "Daily sync plist: launchctl load $PLIST_FILE"
+  echo "Weekly scan plist: launchctl load $SCAN_PLIST"
 else
   echo ""
-  echo "Add this to your crontab (crontab -e):"
-  echo "0 $SCHEDULE_HOUR * * * $OUTPUT_DIR/autodocs-sync.sh"
+  echo "Add these to your crontab (crontab -e):"
+  echo "  Daily sync: 0 $SCHEDULE_HOUR * * * $OUTPUT_DIR/autodocs-sync.sh"
+  echo "  Weekly scan: 0 $SCHEDULE_HOUR * * 6 $OUTPUT_DIR/autodocs-structural-scan.sh"
 fi
 
 # --- Done ---

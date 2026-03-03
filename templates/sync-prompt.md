@@ -68,7 +68,16 @@ If the `lastMergeCommit.commitId` is not available, or the git command fails, fi
 4. Add a note: "(file paths unavailable — classified by branch/title)".
 5. Do NOT include a `Files:` line for these PRs.
 
-Collect for each PR: ID, title, author name, merge timestamp, and the list of changed file paths.
+Also extract the PR description from the response (the `description` field, or `completionOptions.mergeCommitMessage` if description is empty). If the description is longer than 500 characters, include the first 500 characters followed by "..."
+
+4. For feature-relevant PRs (YES or MAYBE classification), fetch PR review threads using `mcp__azure-devops__repo_list_pull_request_threads` with:
+   - `repositoryId`: from config `ado.repo_id`
+   - `pullRequestId`: the PR's ID
+   Extract human discussion threads only — ignore auto-generated comments (build status, policy checks, bot comments). Summarize the key discussion points in 2-3 sentences.
+
+If the thread tool is unavailable, skip this step (do not fail the sync).
+
+Collect for each PR: ID, title, description, author name, merge timestamp, the list of changed file paths, and review thread summary (if available).
 
 If ADO is unavailable or returns an error, skip Steps 3-5 entirely. Set a flag to mark `sync_status: partial` in the output.
 
@@ -134,8 +143,10 @@ anomaly_count: <number of NEW error patterns, or 0 if telemetry not configured>
 
 ## Team PRs (last Xh)
 - PR #<id>: "<title>" by <author> — merged
+  Description: <PR description, max 500 chars>
   ${FEATURE_NAME}: YES (<matching path prefix>) | MAYBE — review | NO
   Files: <full list of changed file paths, one per line indented, ONLY for YES/MAYBE PRs>
+  Threads: <summary of key review discussion points, 2-3 sentences, ONLY for YES/MAYBE PRs if available>
 
 ## Owner Activity (${OWNER_NAME})
 - Reviewed: PR #<id> (<author>), PR #<id> (<author>)
