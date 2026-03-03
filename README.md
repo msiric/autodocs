@@ -33,9 +33,15 @@ Your repo (git)          Azure DevOps              Kusto (optional)
   |                                                         |
   |  Call 3: Suggest + Changelog (daily, if drift found)    |
   |  - Read flagged sections from your actual docs          |
-  |  - Generate before/after edit suggestions               |
+  |  - Generate FIND/REPLACE edit suggestions (verified)    |
   |  - Write changelog entries capturing WHY things changed |
   |  - Write: drift-suggestions.md, changelog-<doc>.md      |
+  |                                                         |
+  |  Call 4: Apply as PR (optional, if suggestions found)   |
+  |  - Apply CONFIDENT + VERIFIED suggestions to doc files  |
+  |  - Create branch, commit changes + changelog            |
+  |  - Open pull request in ADO (with work item link)       |
+  |  - Human reviews and merges                             |
   |                                                         |
   |  Weekly: Structural Scan (Saturday)                     |
   |  - Verify every file referenced in docs still exists    |
@@ -48,7 +54,7 @@ Your repo (git)          Azure DevOps              Kusto (optional)
 
 **`git diff-tree` for file-level precision.** The ADO MCP doesn't expose changed files for a PR. autodocs extracts the merge commit SHA from the PR response, then runs `git diff-tree` against the local repo. This enables precise, package-to-section drift detection.
 
-**Suggested updates, not auto-edits.** autodocs reads the flagged doc section and the PR changes, then generates a before/after edit suggestion. The human reviews and applies. This gives 90% of the productivity benefit of auto-editing with 0% of the risk.
+**FIND/REPLACE with self-verification.** Suggestions use a structured FIND/REPLACE format where each FIND block is verified against the actual doc (with line numbers). Optionally, autodocs can apply verified suggestions automatically by opening a PR in ADO — the human reviews and merges through the standard code review workflow.
 
 **Changelog with "why."** Most documentation tells you WHAT the system does today. autodocs also captures WHY things changed — from PR descriptions and review threads. Six months later, when nobody remembers why `handleError` became `classifyError`, the changelog does.
 
@@ -66,15 +72,17 @@ Your repo (git)          Azure DevOps              Kusto (optional)
 - Confidence levels (CRITICAL / HIGH / LOW)
 - New error patterns not in your known patterns list
 
-**drift-suggestions.md** — Before/after edit suggestions:
-- Quotes the current doc text and proposes the update
+**drift-suggestions.md** — FIND/REPLACE edit suggestions:
+- Structured FIND/REPLACE or FIND/INSERT AFTER format
+- Each FIND block self-verified against the doc (with line numbers)
 - Rated CONFIDENT (clear factual change) or REVIEW (needs human judgment)
-- Only generated when HIGH or CRITICAL drift is detected
+- Frontmatter includes `verified: X/Y` count
 
 **changelog-\<doc\>.md** — Per-doc change history, organized by section:
 - What changed, why it changed (from PR descriptions)
 - Reviewer context (from PR review threads)
 - Permanent record — never trimmed
+- Committed to the repo alongside doc edits (via auto-PR)
 
 **drift-status.md** — Active alert tracker (Obsidian-compatible checkboxes):
 - Check off alerts you've resolved
@@ -137,7 +145,7 @@ docs:
 ### Run
 
 ```bash
-# Manual run (full daily chain: sync → drift → suggest)
+# Manual run (full daily chain: sync → drift → suggest → apply PR)
 autodocs-now
 
 # Structural scan (usually weekly, can run manually)
@@ -147,7 +155,7 @@ autodocs-structural-scan.sh
 ### Schedule
 
 ```bash
-# Daily sync + drift + suggest (macOS)
+# Daily sync + drift + suggest + apply (macOS)
 launchctl load ~/Library/LaunchAgents/com.autodocs.sync.plist
 
 # Weekly structural scan (macOS)
@@ -183,12 +191,20 @@ The [examples/channel-pages/](examples/channel-pages/) directory contains a comp
 
 Alerts are grouped by section (not per-file), deduplicated across days, and auto-expire if unresolved.
 
-### Suggested updates
+### Suggested updates + auto-PR
 
 When drift is detected, autodocs reads the flagged doc section and the PR changes, then generates:
-- **Before/after diff** — the current text and the suggested replacement
+- **FIND/REPLACE diffs** — exact text from the doc (verified with line numbers) and the replacement
+- **INSERT AFTER operations** — for adding new content (table rows, paragraphs)
+- **Self-verification** — each FIND block is confirmed to exist verbatim in the doc
 - **Confidence rating** — CONFIDENT for clear factual changes, REVIEW for ambiguous ones
 - **Changelog entry** — what changed, why (from PR description), and reviewer context (from PR threads)
+
+If `auto_pr` is enabled in config, autodocs automatically:
+1. Applies CONFIDENT + VERIFIED suggestions to the doc files in the repo
+2. Includes the changelog alongside the edits
+3. Creates a branch and opens a PR in ADO (with work item linking)
+4. The human reviews and merges — standard code review workflow
 
 ### Structural scan
 
@@ -199,20 +215,21 @@ Once a week, autodocs audits your docs against the actual repo:
 
 ## Design principles
 
-- **Detect, never edit.** autodocs flags stale sections and suggests updates — it never modifies your documentation.
+- **Suggest, never force.** autodocs generates verified FIND/REPLACE suggestions and optionally opens PRs — but a human always reviews before changes reach the main branch.
 - **Deterministic classification.** PR relevance is determined by file path matching, not LLM inference.
 - **Graceful degradation.** If ADO fails, telemetry still runs (and vice versa). If file paths aren't available, LOW alerts are generated instead of silence.
-- **Three-call isolation.** Sync, drift, and suggest run as independent Claude Code calls. Each can fail without corrupting the others.
+- **Four-call isolation.** Sync, drift, suggest, and apply run as independent Claude Code calls. Each can fail without corrupting the others.
 - **Config-driven.** Team members, paths, queries, and mappings live in config. Prompts are generic templates.
 
 ## Security
 
-- **Read-only ADO access.** Only 5 read-only ADO MCP tools are allowed. No write operations (no PR creation, no work item updates).
+- **Minimal ADO access.** Calls 1-3 use 5 read-only ADO tools. Call 4 adds `repo_create_pull_request` and `repo_create_branch` — the only write operations, and only to create PRs on feature branches (never direct writes to the target branch).
 - **No PII in output.** Prompts explicitly prohibit including internal URLs, stack traces, or user identifiers.
 - **Kusto queries are predefined.** The LLM copies queries verbatim from config — it never generates KQL.
-- **Write sandbox.** Each prompt can only write to its specific output files.
-- **Git operations scoped.** Only `git diff-tree`, `git ls-files`, and `git fetch` are used — no modifications to the repo.
-- **Suggestions are advisory.** The suggest prompt writes to its own files. It never touches your documentation.
+- **Write sandbox.** Each prompt can only write to its specific output files. The apply prompt can additionally write to doc files in the repo (gated by `auto_pr` config).
+- **Git operations scoped.** Read operations: `git diff-tree`, `git ls-files`, `git fetch`. Write operations (Call 4 only): `git checkout -b`, `git add`, `git commit`, `git push` — always to a feature branch, never to the target branch.
+- **Self-verified suggestions.** Each FIND block is confirmed to exist verbatim in the doc before being applied. Unverified suggestions are skipped.
+- **Human reviews all changes.** Auto-PRs go through standard ADO review workflow. Branch protection rules apply.
 
 ## License
 

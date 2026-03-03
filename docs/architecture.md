@@ -43,11 +43,18 @@ autodocs-sync.sh
     |   ├── Read drift-status.md (unchecked HIGH/CRITICAL alerts)
     |   ├── Read flagged sections from reference docs
     |   ├── Read PR details from daily-report.md (description, files, threads)
-    |   ├── Generate before/after edit suggestions
+    |   ├── Generate FIND/REPLACE suggestions (self-verified against doc)
     |   ├── Generate changelog entries (what changed + why)
     |   └── Write: drift-suggestions.md, changelog-<doc>.md
     |
-    └── Write sync-status.md (status + drift + suggest)
+    ├── Call 4: Apply Prompt (optional, if auto_pr enabled + CONFIDENT+VERIFIED)
+    |   ├── Read drift-suggestions.md (filter CONFIDENT + Verified: YES)
+    |   ├── Apply FIND/REPLACE and INSERT AFTER to doc files in repo
+    |   ├── Copy changelog files to repo docs directory
+    |   ├── git: create branch, commit, push
+    |   └── ADO MCP: create pull request (with work item link)
+    |
+    └── Write sync-status.md (status + drift + suggest + apply)
 
 launchd/cron (weekly, Saturday)
     |
@@ -96,20 +103,21 @@ The approach works for all merge strategies (squash, merge commit, rebase) becau
 
 Each prompt runs as a separate Claude Code invocation with its own allowlist:
 
-| Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest |
-|----------|-------------|---------------|-----------------|
-| Purpose | Fetch data from ADO/Kusto | Detect stale doc sections | Generate edit suggestions + changelog |
-| Inputs | config.yaml, ADO, Kusto, git | daily-report.md, config.yaml, docs | drift-report.md, daily-report.md, docs |
-| Outputs | daily-report.md, activity-log.md | drift-report.md, drift-status.md, drift-log.md | drift-suggestions.md, changelog-*.md |
-| Allowed tools | 5 ADO MCP + Kusto MCP + Bash(git) + Write | Read + Write | Read + Write |
-| Runs when | Always | Call 1 succeeded | Unchecked HIGH/CRITICAL alerts exist |
-| Failure impact | sync-status.md = "failed" | Logged, sync output preserved | Logged, drift output preserved |
+| Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest | Call 4: Apply |
+|----------|-------------|---------------|-----------------|---------------|
+| Purpose | Fetch data from ADO/Kusto | Detect stale doc sections | Generate FIND/REPLACE suggestions | Apply edits + open PR |
+| Inputs | config.yaml, ADO, Kusto, git | daily-report.md, config.yaml, docs | drift-status.md, daily-report.md, docs | drift-suggestions.md, config.yaml, doc files |
+| Outputs | daily-report.md, activity-log.md | drift-report.md, drift-status.md, drift-log.md | drift-suggestions.md, changelog-*.md | git branch + ADO PR |
+| Allowed tools | 5 ADO MCP + Kusto MCP + Bash(git) + Write | Read + Write | Read + Write | Read + Edit + Write + Bash(git) + 2 ADO write tools |
+| Runs when | Always | Call 1 succeeded | Unchecked HIGH/CRITICAL alerts | auto_pr enabled + CONFIDENT+VERIFIED suggestions |
+| Failure impact | sync-status.md = "failed" | Logged, sync output preserved | Logged, drift output preserved | Logged, suggestions preserved |
 
 This means:
 - Each prompt can fail without corrupting the others
 - Each can be debugged independently
-- Token budgets are independent (~35K sync, ~10K drift, ~40K suggest)
-- Call 3 only runs when there's work to do (skipped on clean days)
+- Token budgets are independent (~35K sync, ~10K drift, ~40K suggest, ~15K apply)
+- Calls 3-4 only run when there's work to do (skipped on clean days)
+- Call 4 is the only call with write access to ADO (branch + PR creation)
 
 The weekly structural scan runs as a completely separate job with its own wrapper and schedule.
 

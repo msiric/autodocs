@@ -109,6 +109,14 @@ docs:
   - name: "your-guide.md"
 ```
 
+#### `repo_path` (optional, required for auto-PR)
+
+Path to the doc file within the git repo. Used by Call 4 (apply) to locate the file for editing.
+
+```yaml
+    repo_path: "docs/your-feature/your-guide.md"
+```
+
 #### `package_map` (optional)
 
 Maps package names to doc section names. Used for PR drift detection.
@@ -155,6 +163,20 @@ Packages to skip in unmapped file detection. Shared packages that appear in many
       - test-utilities
 ```
 
+### `auto_pr` (optional)
+
+Enables Call 4: automatically apply CONFIDENT + VERIFIED suggestions to doc files in the repo and open an ADO pull request. Disabled by default.
+
+```yaml
+auto_pr:
+  enabled: true
+  target_branch: "master"           # PR target branch
+  branch_prefix: "autodocs/"        # Branch name: <prefix><YYYY-MM-DD>
+  work_item_ids: "12345"            # ADO work item ID(s) to link to each PR
+```
+
+Requires `repo_path` on each doc entry (see docs section above) so the apply prompt knows where to find the files in the repo.
+
 ### `last_verified` (optional)
 
 Date when the config was last reviewed for accuracy. Informational only.
@@ -174,10 +196,11 @@ autodocs generates these files in the output directory:
 | `drift-report.md` | Drift | Overwritten daily | Today's drift alerts + active unresolved |
 | `drift-status.md` | Drift | Rewritten daily | Checkbox list (Obsidian-compatible) |
 | `drift-log.md` | Drift | Appended daily | Drift alert history (30-day retention) |
-| `drift-suggestions.md` | Suggest | Overwritten daily | Before/after edit suggestions (only when HIGH/CRITICAL drift) |
+| `drift-suggestions.md` | Suggest | Overwritten daily | FIND/REPLACE edit suggestions, self-verified (only when HIGH/CRITICAL drift) |
 | `changelog-<doc>.md` | Suggest | Appended daily | Per-doc change history organized by section (permanent, never trimmed) |
 | `structural-report.md` | Scan | Overwritten weekly | Missing files + undocumented files audit |
-| `sync-status.md` | Wrapper | Overwritten daily | status + drift + suggest + timestamp |
+| `sync-status.md` | Wrapper | Overwritten daily | status + drift + suggest + apply + timestamp |
+| ADO pull request | Apply | When CONFIDENT+VERIFIED suggestions exist | Branch with doc edits + changelog, linked to work items |
 | `sync.log` | Wrapper | Appended | One-line log per run |
 
 ## Minimal Config (sync only, no telemetry, no drift)
