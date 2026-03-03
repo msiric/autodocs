@@ -11,10 +11,10 @@ Your repo (git)          Azure DevOps              Kusto (optional)
      |                       |                          |
      |   git diff-tree       |   merged PRs             |   telemetry
      |   (changed files)     |   (+ descriptions,       |   (error patterns)
-     |                       |      review threads)      |
+     |                       |      review threads)     |
      v                       v                          v
   +---------------------------------------------------------+
-  |              Claude Code (headless mode)                 |
+  |              Claude Code (headless mode)                |
   |                                                         |
   |  Call 1: Sync (daily)                                   |
   |  - Fetch merged PRs from ADO (with descriptions)        |
@@ -29,7 +29,7 @@ Your repo (git)          Azure DevOps              Kusto (optional)
   |  - Map changed packages to doc sections                 |
   |  - Flag new error patterns not in known list            |
   |  - Detect unmapped files (new code not in docs)         |
-  |  - Write: drift-report.md, drift-status.md, drift-log  |
+  |  - Write: drift-report.md, drift-status.md, drift-log   |
   |                                                         |
   |  Call 3: Suggest + Changelog (daily, if drift found)    |
   |  - Read flagged sections from your actual docs          |
