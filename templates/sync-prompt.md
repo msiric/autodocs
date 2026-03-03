@@ -29,11 +29,11 @@ Extract:
 
 Read the file `${OUTPUT_DIR}/daily-report.md`. If it exists, parse the YAML frontmatter and extract the `date` field.
 
-Determine the lookback window:
-- If today is **Monday**: look back **72 hours** (to Friday evening), regardless of the last report date.
-- If the `date` field exists and is more than 24 hours ago: look back to that date.
-- If the `date` field exists and is within the last 24 hours: look back **24 hours**.
-- If `daily-report.md` does not exist or has no frontmatter: look back **24 hours**.
+Determine the lookback window using these rules IN ORDER (first match wins):
+1. If today is **Monday** → look back **72 hours** (to Friday evening).
+2. If `daily-report.md` does not exist or has no `date` field → look back **24 hours**.
+3. If the `date` field is more than 24 hours ago → look back to that date.
+4. Otherwise → look back **24 hours**.
 
 ## Step 3: Fetch PRs from Azure DevOps
 
@@ -61,7 +61,12 @@ For each PR that passes the filter:
    ```
    This returns the file paths changed in that PR.
 
-If the `lastMergeCommit.commitId` is not available, or the git command fails, fall back to branch name and title pattern matching for classification (mark as "file paths unavailable").
+If the `lastMergeCommit.commitId` is not available, or the git command fails, file paths are unavailable for this PR. Use this fallback for classification:
+1. If the PR's source branch name contains the `relevant_pattern` substring (case-insensitive) → classify as MAYBE.
+2. Otherwise, if the PR title contains the `relevant_pattern` substring (case-insensitive) → classify as MAYBE.
+3. If neither matches → classify as NO.
+4. Add a note: "(file paths unavailable — classified by branch/title)".
+5. Do NOT include a `Files:` line for these PRs.
 
 Collect for each PR: ID, title, author name, merge timestamp, and the list of changed file paths.
 
@@ -101,8 +106,8 @@ If `telemetry` is not present in config or `telemetry.enabled` is `false`, skip 
 
 Check the config: if any entry in `docs` has a `known_patterns_section` field, read that doc from `${OUTPUT_DIR}/<doc.name>`.
 
-Find the section matching `known_patterns_section`. For each distinct error string from the telemetry query results (Step 6), check if it matches a known pattern in that section.
-- If it matches: note which known pattern it corresponds to.
+Find the section matching `known_patterns_section`. For each distinct error string from the telemetry query results (Step 6), check if it matches a known pattern using case-insensitive substring matching: if the error string contains a known pattern, or a known pattern contains the error string, consider it a match.
+- If it matches: note which known pattern it corresponds to (mark as "KNOWN").
 - If it does NOT match any known pattern: mark it as **"NEW"** in the anomalies section.
 
 If no doc has `known_patterns_section`, or if Step 6 was skipped, skip this step.

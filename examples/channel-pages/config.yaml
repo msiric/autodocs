@@ -43,7 +43,7 @@ relevant_paths:
   - exp-configs/react-web-client/channelPages/
   - packages/core/services/core-services-telemetry-types/definitions/channel-pages.json
 
-relevant_pattern: "*channel-page*"
+relevant_pattern: "channel-page"
 
 telemetry:
   enabled: true

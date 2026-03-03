@@ -67,13 +67,13 @@ For each feature-relevant PR (YES or MAYBE) from Step 1:
 
 ### Case A: File paths available
 
-If the PR has a `Files:` list, use the individual file paths. Extract the package name from each path (typically the directory 2-3 levels deep, e.g., `packages/components/my-package/` → `my-package`).
+If the PR has a `Files:` list, use the individual file paths to detect drift.
 
-For each doc in config that has a `package_map`:
+For each file path, find its package by matching against the keys in the `package_map` from config: check if the file path CONTAINS the key as a path segment. If multiple keys match, use the LONGEST matching key. For example, for path `packages/data/resolvers/data-resolvers-platform-tabs/src/worker.ts`, the key `data-resolvers-platform-tabs` matches.
 
-1. Look up each package in the `package_map`:
+For each matched package, look up the `package_map`:
    - **Simple mapping** (string value): the value is the doc section name. Create a **HIGH** confidence alert.
-   - **Complex mapping** (object with `default` and `title_hints`): Check the PR title against each key in `title_hints`. Keys are comma-separated keywords. If the title contains any keyword from a key, use that key's value as the section name. If no title hint matches, use the `default` value. Create a **HIGH** confidence alert.
+   - **Complex mapping** (object with `default` and `title_hints`): Check the PR title against each key in `title_hints`. Keys are comma-separated keywords (case-insensitive). If the title contains any keyword from a key, use that key's value as the section name. If multiple keys match, use the FIRST matching key. If no title hint matches, use the `default` value. Create a **HIGH** confidence alert.
 
 2. **Unmapped file detection:** If a package is NOT in the `package_map` AND is not in the doc's `ignore_packages` list, create a **CRITICAL** alert: "File in unmapped package <package-name> — doc index may need update."
 

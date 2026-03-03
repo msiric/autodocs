@@ -198,7 +198,7 @@ team_members:
 relevant_paths:
   - src/my-feature/
 
-relevant_pattern: "*my-feature*"
+relevant_pattern: "my-feature"
 ```
 
 This produces `daily-report.md` and `activity-log.md` only. No telemetry, no drift detection.
