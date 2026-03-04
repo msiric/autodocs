@@ -54,20 +54,33 @@ VERIFY_STATUS="skipped"
 APPLY_STATUS="skipped"
 
 # Determine platform for tool allowlists
-if grep -q "platform: github" "$OUTPUT_DIR/config.yaml" 2>/dev/null; then
-  SYNC_TOOLS="Bash(gh:*),Bash(git:*),Write"
-  APPLY_BASE_TOOLS="Read,Edit,Write,Bash(gh:*),Bash(git:*)"
-else
-  SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
-  SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_get_pull_request_by_id"
-  SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_list_pull_request_threads"
-  SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__search_code"
-  SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
-  SYNC_TOOLS="$SYNC_TOOLS,Bash(git:*),Write"
-  APPLY_BASE_TOOLS="Read,Edit,Write,Bash(git:*)"
-  APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_pull_request"
-  APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_branch"
-fi
+PLATFORM=$(grep "^platform:" "$OUTPUT_DIR/config.yaml" 2>/dev/null | awk '{print $2}' | tr -d '"')
+
+case "$PLATFORM" in
+  github)
+    SYNC_TOOLS="Bash(gh:*),Bash(git:*),Write"
+    APPLY_BASE_TOOLS="Read,Edit,Write,Bash(gh:*),Bash(git:*)"
+    ;;
+  gitlab)
+    SYNC_TOOLS="Bash(glab:*),Bash(git:*),Write"
+    APPLY_BASE_TOOLS="Read,Edit,Write,Bash(glab:*),Bash(git:*)"
+    ;;
+  bitbucket)
+    SYNC_TOOLS="Bash(curl:*),Bash(git:*),Write"
+    APPLY_BASE_TOOLS="Read,Edit,Write,Bash(curl:*),Bash(git:*)"
+    ;;
+  *)  # ado (default)
+    SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
+    SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_get_pull_request_by_id"
+    SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_list_pull_request_threads"
+    SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__search_code"
+    SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
+    SYNC_TOOLS="$SYNC_TOOLS,Bash(git:*),Write"
+    APPLY_BASE_TOOLS="Read,Edit,Write,Bash(git:*)"
+    APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_pull_request"
+    APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_branch"
+    ;;
+esac
 
 # Call 1: Main sync (PRs + telemetry)
 

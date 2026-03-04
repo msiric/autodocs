@@ -19,6 +19,21 @@ github:
   repo: your-repo                    # Repository name
 
 # ---------------------------------------------------------------------------
+# GitLab connection (when platform: gitlab)
+# ---------------------------------------------------------------------------
+# gitlab:
+#   host: "gitlab.com"               # or self-hosted: "gitlab.mycompany.com"
+#   project_path: "group/repo"       # full project path (e.g., "myteam/myapp")
+
+# ---------------------------------------------------------------------------
+# Bitbucket connection (when platform: bitbucket)
+# Auth: set BITBUCKET_TOKEN environment variable
+# ---------------------------------------------------------------------------
+# bitbucket:
+#   workspace: "my-workspace"
+#   repo: "my-repo"
+
+# ---------------------------------------------------------------------------
 # Azure DevOps connection (when platform: ado)
 # ---------------------------------------------------------------------------
 # ado:
@@ -34,8 +49,10 @@ github:
 owner:
   name: "Your Name"
   email: "you@company.com"
-  github_username: "your-username"   # GitHub
-  # ado_id: "00000000-..."           # ADO
+  github_username: "your-username"   # GitHub (author.login)
+  # gitlab_username: "your-username" # GitLab (author.username)
+  # bitbucket_username: "your-user"  # Bitbucket (author.nickname)
+  # ado_id: "00000000-..."           # ADO (GUID)
 
 # ---------------------------------------------------------------------------
 # Team members — PRs by these people are tracked
@@ -45,10 +62,12 @@ team_members:
   - name: "Teammate One"
     email: "teammate1@company.com"
     github_username: "teammate1"     # GitHub
+    # gitlab_username: "teammate1"   # GitLab
+    # bitbucket_username: "teammate1" # Bitbucket
     # ado_id: "00000000-..."         # ADO
   - name: "Teammate Two"
     email: "teammate2@company.com"
-    github_username: "teammate2"     # GitHub
+    github_username: "teammate2"
 
 # ---------------------------------------------------------------------------
 # PR classification — which file paths indicate relevance to your feature

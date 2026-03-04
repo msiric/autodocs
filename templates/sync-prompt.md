@@ -19,8 +19,10 @@ Read the file `${OUTPUT_DIR}/config.yaml`.
 Extract:
 - `platform` — either "github" or "ado". This determines how to fetch PRs.
 - If `platform` is "github": extract `github.owner` and `github.repo`
+- If `platform` is "gitlab": extract `gitlab.host` (default "gitlab.com") and `gitlab.project_path`
+- If `platform` is "bitbucket": extract `bitbucket.workspace` and `bitbucket.repo`
 - If `platform` is "ado": extract `ado.org`, `ado.project`, `ado.repo`, `ado.repo_id`
-- `owner` — the feature owner. Use `github_username` (GitHub) or `ado_id` (ADO) for matching.
+- `owner` — the feature owner. Use `github_username`, `gitlab_username`, `bitbucket_username`, or `ado_id` for matching (depending on platform).
 - `team_members` — list of team members. The owner is implicitly included.
 - `relevant_paths` — list of path prefixes for feature classification
 - `relevant_pattern` — catch-all substring for classification
@@ -62,6 +64,45 @@ This returns ALL data in one call. For each PR in the JSON array:
 - `reviews` — array of `{ body, state, author.login }` — summarize human reviews (ignore bot reviews)
 
 If `gh` fails or returns an error, skip Steps 3-5 entirely. Set `sync_status: partial`.
+
+### If platform is "gitlab":
+
+Use Bash to fetch merged merge requests:
+```
+glab mr list --merged -F json -R <gitlab.project_path> --per-page 100
+```
+
+This returns MRs as JSON. For each MR:
+- Filter by `merged_at` within the lookback window
+- Match `author.username` against `gitlab_username` in config (owner + team members)
+- Extract `merge_commit_sha` for file changes:
+  ```
+  git diff-tree --no-commit-id --name-only -r <merge_commit_sha>
+  ```
+- Extract `title` and `description` (truncate description to 500 chars)
+- For reviews: the JSON may include approvals. Summarize human review comments if available.
+
+If `glab` fails or returns an error, skip Steps 3-5 entirely. Set `sync_status: partial`.
+
+### If platform is "bitbucket":
+
+Use Bash to fetch merged pull requests:
+```
+curl -s -H "Authorization: Bearer $BITBUCKET_TOKEN" \
+  "https://api.bitbucket.org/2.0/repositories/<bitbucket.workspace>/<bitbucket.repo>/pullrequests?state=MERGED&pagelen=50"
+```
+
+This returns a JSON response with a `values` array. For each PR in the array:
+- Filter by `updated_on` within the lookback window
+- Match `author.display_name` or `author.nickname` against `bitbucket_username` in config
+- Extract `merge_commit.hash` for file changes:
+  ```
+  git diff-tree --no-commit-id --name-only -r <merge_commit_hash>
+  ```
+- Extract `title` and `description` (truncate description to 500 chars)
+- For reviews: check the `reviewers` array in the PR response for approval status.
+
+If `curl` fails, `BITBUCKET_TOKEN` is not set, or the API returns an error, skip Steps 3-5 entirely. Set `sync_status: partial`.
 
 ### If platform is "ado":
 

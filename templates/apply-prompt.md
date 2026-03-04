@@ -103,6 +103,27 @@ gh pr create -R <github.owner>/<github.repo> \
   --head <branch_prefix><YYYY-MM-DD>
 ```
 
+**If platform is "gitlab":**
+Use Bash to create the merge request:
+```
+glab mr create -R <gitlab.project_path> \
+  --title "docs: autodocs suggested updates — <YYYY-MM-DD>" \
+  --description "<description>" \
+  --target-branch <auto_pr.target_branch> \
+  --source-branch <branch_prefix><YYYY-MM-DD> \
+  --no-editor
+```
+
+**If platform is "bitbucket":**
+Use Bash to create the pull request:
+```
+curl -s -X POST \
+  -H "Authorization: Bearer $BITBUCKET_TOKEN" \
+  -H "Content-Type: application/json" \
+  "https://api.bitbucket.org/2.0/repositories/<bitbucket.workspace>/<bitbucket.repo>/pullrequests" \
+  -d '{"title":"docs: autodocs suggested updates — <YYYY-MM-DD>","source":{"branch":{"name":"<branch_prefix><YYYY-MM-DD>"}},"destination":{"branch":{"name":"<auto_pr.target_branch>"}},"description":"<description>"}'
+```
+
 **If platform is "ado":**
 Use `mcp__azure-devops__repo_create_pull_request` with:
 - `repositoryId`: from config `ado.repo_id`

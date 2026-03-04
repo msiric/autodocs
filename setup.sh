@@ -30,15 +30,32 @@ echo ""
 echo "Platform:"
 echo "  1. GitHub"
 echo "  2. Azure DevOps"
-read -rp "Select (1 or 2): " PLATFORM_CHOICE
+echo "  3. GitLab"
+echo "  4. Bitbucket"
+read -rp "Select (1-4): " PLATFORM_CHOICE
 
-if [ "$PLATFORM_CHOICE" = "1" ]; then
-  PLATFORM="github"
-  read -rp "GitHub owner (user or org): " GH_OWNER
-  read -rp "GitHub repo name: " GH_REPO
-else
-  PLATFORM="ado"
-  read -rp "ADO organization name: " ADO_ORG
+case "$PLATFORM_CHOICE" in
+  1)
+    PLATFORM="github"
+    read -rp "GitHub owner (user or org): " GH_OWNER
+    read -rp "GitHub repo name: " GH_REPO
+    ;;
+  3)
+    PLATFORM="gitlab"
+    read -rp "GitLab host (default: gitlab.com): " GITLAB_HOST
+    GITLAB_HOST="${GITLAB_HOST:-gitlab.com}"
+    read -rp "GitLab project path (e.g., mygroup/myrepo): " GITLAB_PROJECT_PATH
+    ;;
+  4)
+    PLATFORM="bitbucket"
+    read -rp "Bitbucket workspace: " BB_WORKSPACE
+    read -rp "Bitbucket repo name: " BB_REPO
+    echo ""
+    echo "  Note: Set BITBUCKET_TOKEN environment variable for API access."
+    ;;
+  *)
+    PLATFORM="ado"
+    read -rp "ADO organization name: " ADO_ORG
   read -rp "ADO project name: " ADO_PROJECT
   read -rp "ADO repository name: " ADO_REPO
 
@@ -62,7 +79,8 @@ else
       echo "Resolved: $ADO_REPO_ID"
     fi
   fi
-fi
+    ;;
+esac
 
 echo ""
 
@@ -113,13 +131,29 @@ else
 
 platform: "$PLATFORM"
 
-$(if [ "$PLATFORM" = "github" ]; then
+$(case "$PLATFORM" in
+  github)
 cat <<GITHUB
 github:
   owner: "$GH_OWNER"
   repo: "$GH_REPO"
 GITHUB
-else
+    ;;
+  gitlab)
+cat <<GITLAB
+gitlab:
+  host: "$GITLAB_HOST"
+  project_path: "$GITLAB_PROJECT_PATH"
+GITLAB
+    ;;
+  bitbucket)
+cat <<BITBUCKET
+bitbucket:
+  workspace: "$BB_WORKSPACE"
+  repo: "$BB_REPO"
+BITBUCKET
+    ;;
+  *)
 cat <<ADO
 ado:
   org: "$ADO_ORG"
@@ -127,12 +161,18 @@ ado:
   repo: "$ADO_REPO"
   repo_id: "$ADO_REPO_ID"
 ADO
-fi)
+    ;;
+esac)
 
 owner:
   name: "$OWNER_NAME"
   email: "$OWNER_EMAIL"
-$(if [ "$PLATFORM" = "github" ]; then echo "  github_username: \"$OWNER_NAME\"  # Update with your GitHub username"; else echo "  ado_id: \"$OWNER_ADO_ID\""; fi)
+$(case "$PLATFORM" in
+  github) echo "  github_username: \"$OWNER_NAME\"  # Update with your GitHub username" ;;
+  gitlab) echo "  gitlab_username: \"$OWNER_NAME\"  # Update with your GitLab username" ;;
+  bitbucket) echo "  bitbucket_username: \"$OWNER_NAME\"  # Update with your Bitbucket username" ;;
+  *) echo "  ado_id: \"$OWNER_ADO_ID\"" ;;
+esac)
 
 # Add your team members here (uncomment and edit)
 # team_members:
