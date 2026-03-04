@@ -8,11 +8,270 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
+HELPER="$SCRIPT_DIR/scripts/config-helper.py"
 
-QUICK_MODE=false
-if [ "${1:-}" = "--quick" ]; then
-  QUICK_MODE=true
-fi
+# ---------------------------------------------------------------------------
+# Config management subcommands
+# ---------------------------------------------------------------------------
+
+find_config() {
+  # Search for config.yaml in common locations
+  for candidate in "./config.yaml" "./.autodocs/config.yaml"; do
+    if [ -f "$candidate" ]; then
+      echo "$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")"
+      return 0
+    fi
+  done
+  echo "Error: No config.yaml found. Run setup.sh first." >&2
+  return 1
+}
+
+cmd_team() {
+  local config_file
+  config_file=$(find_config) || exit 1
+  local action="${1:-list}"
+  local platform
+  platform=$(python3 "$HELPER" "$config_file" get platform)
+
+  case "$action" in
+    list)
+      echo "Team members:"
+      local members
+      members=$(python3 "$HELPER" "$config_file" list team)
+      if [ -n "$members" ]; then
+        echo "$members" | nl
+      else
+        echo "  (none)"
+      fi
+      ;;
+    add)
+      read -rp "Name: " name
+      read -rp "Username: " username
+      local field="${platform}_username"
+      [ "$platform" = "ado" ] && field="ado_id"
+      if python3 "$HELPER" "$config_file" has team "$name" 2>/dev/null; then
+        echo "$name is already a team member."
+      else
+        python3 "$HELPER" "$config_file" add team "$name" "$field" "$username"
+        echo "Added: $name ($username)"
+      fi
+      ;;
+    remove)
+      echo "Team members:"
+      local members
+      members=$(python3 "$HELPER" "$config_file" list team)
+      if [ -z "$members" ]; then
+        echo "  (none)"; return
+      fi
+      echo "$members" | nl
+      read -rp "Remove (number, or Enter to cancel): " num
+      if [ -n "$num" ]; then
+        local name
+        name=$(echo "$members" | sed -n "${num}p")
+        if [ -n "$name" ]; then
+          python3 "$HELPER" "$config_file" remove team "$name"
+          echo "Removed: $name"
+        fi
+      fi
+      ;;
+    discover)
+      echo "Discovering contributors from recent PRs..."
+      local discovered=""
+      case "$platform" in
+        github)
+          local owner repo
+          owner=$(python3 "$HELPER" "$config_file" get github | python3 -c "import sys,yaml;d=yaml.safe_load(sys.stdin);print(d.get('owner',''))" 2>/dev/null)
+          repo=$(python3 "$HELPER" "$config_file" get github | python3 -c "import sys,yaml;d=yaml.safe_load(sys.stdin);print(d.get('repo',''))" 2>/dev/null)
+          [ -n "$owner" ] && [ -n "$repo" ] && \
+            discovered=$(gh pr list -R "$owner/$repo" --state merged --limit 50 \
+              --json author --jq '[.[].author.login] | unique | .[]' 2>/dev/null)
+          ;;
+      esac
+      if [ -n "$discovered" ]; then
+        echo "Found contributors:"
+        local new_members=""
+        while IFS= read -r username; do
+          if ! python3 "$HELPER" "$config_file" has team "$username" 2>/dev/null; then
+            new_members="${new_members}${username}\n"
+            echo "  NEW: $username"
+          else
+            echo "  (existing): $username"
+          fi
+        done <<< "$discovered"
+        if [ -n "$new_members" ]; then
+          read -rp "Add new members? [Y/n] " answer
+          if [[ -z "$answer" || "$answer" =~ ^[Yy] ]]; then
+            local field="${platform}_username"
+            [ "$platform" = "ado" ] && field="ado_id"
+            echo -e "$new_members" | while IFS= read -r username; do
+              [ -n "$username" ] && python3 "$HELPER" "$config_file" add team "$username" "$field" "$username"
+            done
+            echo "Done."
+          fi
+        else
+          echo "All contributors are already team members."
+        fi
+      else
+        echo "  No contributors found (or CLI not available)."
+      fi
+      ;;
+    *)
+      echo "Usage: setup.sh team [list|add|remove|discover]"
+      ;;
+  esac
+}
+
+cmd_docs() {
+  local config_file
+  config_file=$(find_config) || exit 1
+  local action="${1:-list}"
+
+  case "$action" in
+    list)
+      echo "Monitored docs:"
+      local docs
+      docs=$(python3 "$HELPER" "$config_file" list docs)
+      if [ -n "$docs" ]; then
+        echo "$docs" | nl
+      else
+        echo "  (none)"
+      fi
+      ;;
+    add)
+      read -rp "Doc filename (e.g., architecture.md): " name
+      read -rp "Repo path (e.g., docs/architecture.md, or Enter to skip): " repo_path
+      if python3 "$HELPER" "$config_file" has doc "$name" 2>/dev/null; then
+        echo "$name is already monitored."
+      else
+        if [ -n "$repo_path" ]; then
+          python3 "$HELPER" "$config_file" add doc "$name" "$repo_path"
+        else
+          python3 "$HELPER" "$config_file" add doc "$name"
+        fi
+        echo "Added: $name"
+      fi
+      ;;
+    remove)
+      echo "Monitored docs:"
+      local docs
+      docs=$(python3 "$HELPER" "$config_file" list docs)
+      if [ -z "$docs" ]; then
+        echo "  (none)"; return
+      fi
+      echo "$docs" | nl
+      read -rp "Remove (number, or Enter to cancel): " num
+      if [ -n "$num" ]; then
+        local name
+        name=$(echo "$docs" | sed -n "${num}p")
+        if [ -n "$name" ]; then
+          python3 "$HELPER" "$config_file" remove doc "$name"
+          echo "Removed: $name"
+        fi
+      fi
+      ;;
+    *)
+      echo "Usage: setup.sh docs [list|add|remove]"
+      ;;
+  esac
+}
+
+cmd_paths() {
+  local config_file
+  config_file=$(find_config) || exit 1
+  local action="${1:-list}"
+
+  case "$action" in
+    list)
+      echo "Relevant paths:"
+      local paths
+      paths=$(python3 "$HELPER" "$config_file" list paths)
+      if [ -n "$paths" ]; then
+        echo "$paths" | nl
+      else
+        echo "  (none)"
+      fi
+      ;;
+    add)
+      read -rp "Path prefix (e.g., src/api/): " path
+      if python3 "$HELPER" "$config_file" has path "$path" 2>/dev/null; then
+        echo "$path is already in relevant_paths."
+      else
+        python3 "$HELPER" "$config_file" add path "$path"
+        echo "Added: $path"
+      fi
+      ;;
+    remove)
+      echo "Relevant paths:"
+      local paths
+      paths=$(python3 "$HELPER" "$config_file" list paths)
+      if [ -z "$paths" ]; then
+        echo "  (none)"; return
+      fi
+      echo "$paths" | nl
+      read -rp "Remove (number, or Enter to cancel): " num
+      if [ -n "$num" ]; then
+        local path
+        path=$(echo "$paths" | sed -n "${num}p")
+        if [ -n "$path" ]; then
+          python3 "$HELPER" "$config_file" remove path "$path"
+          echo "Removed: $path"
+        fi
+      fi
+      ;;
+    discover)
+      echo "Discovering paths from doc files..."
+      local docs
+      docs=$(python3 "$HELPER" "$config_file" list docs)
+      if [ -z "$docs" ]; then
+        echo "  No docs configured. Add docs first: setup.sh docs add"
+        return
+      fi
+      local output_dir
+      output_dir=$(dirname "$config_file")
+      while IFS= read -r doc; do
+        local doc_path="$output_dir/$doc"
+        if [ -f "$doc_path" ]; then
+          echo "Paths from $doc:"
+          local discovered
+          discovered=$(grep -oE '[a-zA-Z][a-zA-Z0-9/_.-]+\.(ts|js|py|tsx|jsx|go|rs|java|rb|cs)' "$doc_path" \
+            | sed 's|/[^/]*$||' | sort -u 2>/dev/null)
+          if [ -n "$discovered" ]; then
+            while IFS= read -r path; do
+              if ! python3 "$HELPER" "$config_file" has path "$path" 2>/dev/null; then
+                echo "  NEW: $path/"
+                python3 "$HELPER" "$config_file" add path "$path"
+              fi
+            done <<< "$discovered"
+          fi
+        fi
+      done <<< "$docs"
+      echo "Done."
+      ;;
+    *)
+      echo "Usage: setup.sh paths [list|add|remove|discover]"
+      ;;
+  esac
+}
+
+cmd_config() {
+  local config_file
+  config_file=$(find_config) || exit 1
+  ${EDITOR:-vi} "$config_file"
+}
+
+# --- Subcommand routing ---
+case "${1:-}" in
+  team)   shift; cmd_team "$@"; exit 0 ;;
+  docs)   shift; cmd_docs "$@"; exit 0 ;;
+  paths)  shift; cmd_paths "$@"; exit 0 ;;
+  config) shift; cmd_config "$@"; exit 0 ;;
+  --quick) QUICK_MODE=true ;;
+  "")     ;; # no args = full setup
+  -*)     ;; # other flags
+  *)      echo "Usage: setup.sh [--quick] | team | docs | paths | config"; exit 1 ;;
+esac
+
+QUICK_MODE=${QUICK_MODE:-false}
 
 # ---------------------------------------------------------------------------
 # Helper functions
