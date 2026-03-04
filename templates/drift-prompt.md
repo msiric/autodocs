@@ -19,13 +19,15 @@ Extract:
 - Each PR under "## Team PRs". For each, note:
   - PR number and title
   - Feature classification (YES, MAYBE, or NO)
-  - If YES or MAYBE: check for two things:
+  - If YES or MAYBE: check for:
     - The parenthetical after the classification — this shows the matching path prefixes.
-    - A `Files:` line below the classification — this lists ALL changed file paths. If present, file paths ARE available. Record every file path.
+    - A `Files:` line below the classification — this lists changed file paths WITH change types (M=modified, A=added, D=deleted, R=renamed). Record both the change type and path.
+    - A `Diff:` line — actual code diff for mapped files (if present, use for more precise drift analysis).
     - If there is no `Files:` line and the classification says "branch matches" or "title prefix", file paths are NOT available for this PR.
+  - If REFACTOR: note this is a large mechanical change — generate one LOW alert, not per-file alerts.
 - The "### Anomalies" section: look for any lines containing the word "NEW" — these are error patterns not matching the known list.
 
-Only feature-relevant PRs (YES or MAYBE) are relevant for drift detection. Ignore NO PRs.
+Only feature-relevant PRs (YES, MAYBE, or REFACTOR) are relevant for drift detection. Ignore NO PRs.
 
 ## Step 2: Load Drift Configuration
 
@@ -63,21 +65,27 @@ If the file does not exist, start with an empty list.
 
 ## Step 6: Detect Drift from PRs
 
-For each feature-relevant PR (YES or MAYBE) from Step 1:
+For each feature-relevant PR (YES, MAYBE, or REFACTOR) from Step 1:
 
-### Case A: File paths available
+### Case A: REFACTOR classification
 
-If the PR has a `Files:` list, use the individual file paths to detect drift.
+Create ONE **LOW** confidence alert: "Large refactoring PR (N files) — manual review recommended." Do not generate per-file alerts.
 
-For each file path, find its package by matching against the keys in the `package_map` from config: check if the file path contains `/<key>/` (the key enclosed by path separators — this ensures exact directory name matching, not substring). If multiple keys match, use the LONGEST matching key. For example, for path `packages/data/resolvers/data-resolvers-platform-tabs/src/worker.ts`, the key `data-resolvers-platform-tabs` matches (because `/.../data-resolvers-platform-tabs/src/...` contains `/data-resolvers-platform-tabs/`).
+### Case B: File paths available (YES/MAYBE with Files)
 
-1. **Package lookup:** For each matched package, look up the `package_map`:
-   - **Simple mapping** (string value): the value is the doc section name. Create a **HIGH** confidence alert.
-   - **Complex mapping** (object with `default` and `title_hints`): Check the PR title against each key in `title_hints`. Keys are comma-separated keywords (case-insensitive). If the title contains any keyword from a key, use that key's value as the section name. If multiple keys match, use the FIRST matching key. If no title hint matches, use the `default` value. Create a **HIGH** confidence alert.
+If the PR has a `Files:` list, use the individual file paths and change types to detect drift.
 
-2. **Unmapped file detection:** If a package is NOT in the `package_map` AND is not in the doc's `ignore_packages` list, create a **CRITICAL** alert: "File in unmapped package <package-name> — doc index may need update."
+For each file path, find its package by matching against the keys in the `package_map` from config: check if the file path contains `/<key>/` (the key enclosed by path separators — this ensures exact directory name matching, not substring). If multiple keys match, use the LONGEST matching key.
 
-### Case B: File paths NOT available
+1. **Package lookup by change type:**
+   - **M (Modified):** Look up `package_map` → create **HIGH** alert for the mapped section. If `title_hints` are configured, use them to narrow the section.
+   - **A (Added):** If the package is in `package_map` → **HIGH** alert. If NOT in `package_map` and not in `ignore_packages` → **CRITICAL** alert: "New file in unmapped package — doc index may need update."
+   - **D (Deleted):** → **HIGH** alert: "File deleted — remove doc references to this file path."
+   - **R (Renamed):** → **HIGH** alert: "File renamed from <old> to <new> — update doc path references."
+
+2. **Complex mappings** (object with `default` and `title_hints`): Check the PR title against each key in `title_hints`. Keys are comma-separated keywords (case-insensitive). If the title contains any keyword from a key, use that key's value as the section name. If multiple keys match, use the FIRST matching key. If no title hint matches, use the `default` value.
+
+### Case C: File paths NOT available
 
 The classification says "branch matches" or "title prefix" — no package path.
 

@@ -52,12 +52,23 @@ For each remaining alert from Step 1:
 2. Read the doc file from `${OUTPUT_DIR}/<doc name>`.
 3. Find the section by its header name. Read the section content (from the header to the next same-level header or end of file).
 4. Identify the PR(s) that triggered the alert.
-5. If the PR is in today's daily-report.md, get its Description and Files fields. If not, use the PR title from the alert entry.
+5. If the PR is in today's daily-report.md, get its Description, Files, and Diff fields. If not, use the PR title from the alert entry.
 
-Now compare the section content against the PR changes. Determine which operation is needed:
+**Using the Diff field:** If the PR has a `Diff:` field, use the actual code diff to understand EXACTLY what changed. The diff shows function renames, parameter additions, behavioral changes, and deleted code. Use this for precise FIND/REPLACE suggestions instead of inferring from the PR title.
+
+**Using change types:** The Files field includes change types (M/A/D/R):
+- **D (Deleted):** Suggest REMOVING the doc reference to the deleted file/function
+- **R (Renamed):** Suggest REPLACING old path/name references with the new ones
+- **A (Added):** Suggest INSERTING documentation for the new file/function
+- **M (Modified):** Compare the section content against the diff to determine what needs updating
+
+**Multi-PR conflict detection:** If multiple PRs from this run map to the same (doc, section), sort them by merge timestamp and process sequentially. After generating each suggestion, check: does the new suggestion's FIND text overlap with a previous suggestion's REPLACE text for the same section? If YES → flag BOTH as REVIEW with note: "Multiple PRs affect this section — suggestions may conflict. Manual review recommended." If NO overlap → keep both, they can be applied sequentially.
+
+Now determine which operation is needed:
 
 **REPLACE** — existing text in the doc needs to change (renamed function, changed behavior, outdated description).
 **INSERT AFTER** — new content needs to be added (missing table row, new subsection, new bullet point). Use this when the doc is missing information, not when existing text is wrong.
+**REMOVE** — text should be deleted (references a deleted file/function). Use FIND to identify the text to remove, and REPLACE WITH an empty string or "(removed)".
 
 For each suggestion, generate:
 

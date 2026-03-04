@@ -55,7 +55,11 @@ For each applicable suggestion, read the doc file from the repo using its `repo_
 3. Insert the new text on the line immediately after the anchor.
 4. Write the updated file back to the same path.
 
-If a FIND/anchor text is not found in the repo file, skip that suggestion entirely. Note: "Skipped — FIND text not found in repo copy (may differ from output directory copy)."
+**Stale suggestion detection:** If a FIND/anchor text is not found in the repo file:
+1. Check if the target section header still exists in the file.
+2. If the section exists but FIND text doesn't → mark as **EXPIRED**: "FIND text not found in current doc. The section may have been edited since the suggestion was generated."
+3. If the section header doesn't exist either → mark as **SECTION REMOVED**.
+4. Do NOT attempt fuzzy matching or guessing. Skip the suggestion and include it in the PR description under "Expired Suggestions" with the original FIND/REPLACE details so the reviewer can apply manually if still relevant.
 
 ## Step 2b: Include Changelog
 

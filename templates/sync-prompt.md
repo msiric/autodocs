@@ -124,14 +124,21 @@ For each PR that passes the filter:
 
 2. From the response, extract the `lastMergeCommit.commitId` field (the merge commit SHA).
 
-3. Use Bash to get the list of changed files from the local git repo:
+3. Use Bash to get the list of changed files with change types from the local git repo:
    ```
-   git diff-tree --no-commit-id --name-only -r <commitId>
+   git diff-tree --no-commit-id --name-status -M -r <commitId>
    ```
+   This returns lines like: `M src/errors/handler.ts`, `A src/auth/rate-limiter.ts`, `D src/legacy/old.ts`, `R100\tsrc/old.ts\tsrc/new.ts`. The prefix indicates: M=modified, A=added, D=deleted, R=renamed (with similarity %). Record both the change type and path for each file.
 
-4. Extract the PR description (the `description` field, or `completionOptions.mergeCommitMessage` if description is empty). If longer than 500 characters, truncate with "..."
+4. For YES/MAYBE PRs, get targeted diffs for files that map to documented sections. Run:
+   ```
+   git diff -U3 <commit>^..<commit> -- <file>
+   ```
+   Only diff files whose directory matches a key in the config's `package_map`. Skip test files (`*.test.*`, `*.spec.*`), generated files (`*.generated.*`, `*.min.*`, `dist/`, `build/`), and lock files. Limit to 150 lines of diff total per PR — if exceeded, stop and note "Diff truncated."
 
-5. For feature-relevant PRs, fetch PR review threads using `mcp__azure-devops__repo_list_pull_request_threads` with:
+5. Extract the PR description (the `description` field, or `completionOptions.mergeCommitMessage` if description is empty). If longer than 500 characters, truncate with "..."
+
+6. For feature-relevant PRs, fetch PR review threads using `mcp__azure-devops__repo_list_pull_request_threads` with:
    - `repositoryId`: from config `ado.repo_id`
    - `pullRequestId`: the PR's ID
    Extract human discussion threads only. If the tool is unavailable, skip this step.
@@ -166,6 +173,8 @@ Classification:
 - If no file matches either: mark as **"${FEATURE_NAME}: NO"**.
 
 This is purely string matching. Do NOT use judgment or inference to override the path-based classification.
+
+**Refactoring detection:** After classification, if a PR has >30 files classified as YES/MAYBE AND the Diff shows that >80% of hunks are single-line changes (import renames, variable renames, path updates), reclassify as **"${FEATURE_NAME}: REFACTOR"**. REFACTOR PRs generate one LOW alert instead of many individual alerts.
 
 ## Step 5: Extract Owner's Activity
 
@@ -216,8 +225,13 @@ anomaly_count: <number of NEW error patterns, or 0 if telemetry not configured>
 ## Team PRs (last Xh)
 - PR #<id>: "<title>" by <author> — merged
   Description: <PR description, max 500 chars>
-  ${FEATURE_NAME}: YES (<matching path prefix>) | MAYBE — review | NO
-  Files: <full list of changed file paths, one per line indented, ONLY for YES/MAYBE PRs>
+  ${FEATURE_NAME}: YES (<matching path prefix>) | MAYBE — review | NO | REFACTOR
+  Files: <change type + file path, one per line indented, ONLY for YES/MAYBE PRs>
+    M src/errors/handler.ts
+    A src/auth/rate-limiter.ts
+    R src/old-name.ts → src/new-name.ts
+    D src/legacy/old.ts
+  Diff: <targeted code diff for mapped files, max 150 lines per PR, ONLY for YES/MAYBE PRs>
   Threads: <summary of key review discussion points, 2-3 sentences, ONLY for YES/MAYBE PRs if available>
 
 ## Owner Activity (${OWNER_NAME})
