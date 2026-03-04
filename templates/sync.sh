@@ -53,13 +53,23 @@ SUGGEST_STATUS="skipped"
 VERIFY_STATUS="skipped"
 APPLY_STATUS="skipped"
 
+# Determine platform for tool allowlists
+if grep -q "platform: github" "$OUTPUT_DIR/config.yaml" 2>/dev/null; then
+  SYNC_TOOLS="Bash(gh:*),Bash(git:*),Write"
+  APPLY_BASE_TOOLS="Read,Edit,Write,Bash(gh:*),Bash(git:*)"
+else
+  SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
+  SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_get_pull_request_by_id"
+  SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_list_pull_request_threads"
+  SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__search_code"
+  SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
+  SYNC_TOOLS="$SYNC_TOOLS,Bash(git:*),Write"
+  APPLY_BASE_TOOLS="Read,Edit,Write,Bash(git:*)"
+  APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_pull_request"
+  APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_branch"
+fi
+
 # Call 1: Main sync (PRs + telemetry)
-SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
-SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_get_pull_request_by_id"
-SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_list_pull_request_threads"
-SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__search_code"
-SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
-SYNC_TOOLS="$SYNC_TOOLS,Bash(git:*),Write"
 
 OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
   --add-dir "$OUTPUT_DIR" \
@@ -136,14 +146,10 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
          && grep -q "auto_pr" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
          && [ "$(grep -c 'suggestion_count: 0' "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null)" -eq 0 ]; then
 
-        APPLY_TOOLS="Read,Edit,Write,Bash(git:*)"
-        APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_pull_request"
-        APPLY_TOOLS="$APPLY_TOOLS,mcp__azure-devops__repo_create_branch"
-
         APPLY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/apply-prompt.md")" \
           --add-dir "$OUTPUT_DIR" \
           --add-dir "$REPO_DIR" \
-          --allowedTools "$APPLY_TOOLS" \
+          --allowedTools "$APPLY_BASE_TOOLS" \
           --output-format text \
           2>&1) && APPLY_RC=0 || APPLY_RC=$?
 

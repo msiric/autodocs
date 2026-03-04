@@ -7,21 +7,35 @@
 # Only re-run setup.sh if you change OUTPUT_DIR or REPO_DIR (paths baked into prompts).
 
 # ---------------------------------------------------------------------------
-# Azure DevOps connection
+# Platform: "github" or "ado"
 # ---------------------------------------------------------------------------
-ado:
-  org: your-org                          # ADO organization name
-  project: your-project                  # ADO project name
-  repo: your-repo-name                   # Repository name (for display)
-  repo_id: "00000000-0000-0000-0000-000000000000"  # Repository GUID (setup.sh resolves this)
+platform: github
+
+# ---------------------------------------------------------------------------
+# GitHub connection (when platform: github)
+# ---------------------------------------------------------------------------
+github:
+  owner: your-username               # GitHub user or organization
+  repo: your-repo                    # Repository name
+
+# ---------------------------------------------------------------------------
+# Azure DevOps connection (when platform: ado)
+# ---------------------------------------------------------------------------
+# ado:
+#   org: your-org                    # ADO organization name
+#   project: your-project            # ADO project name
+#   repo: your-repo-name             # Repository name (for display)
+#   repo_id: "00000000-..."          # Repository GUID (setup.sh resolves this)
 
 # ---------------------------------------------------------------------------
 # Feature owner — gets a dedicated "Activity" section in daily reports
+# Use github_username (GitHub) or ado_id (ADO) for PR author matching.
 # ---------------------------------------------------------------------------
 owner:
   name: "Your Name"
   email: "you@company.com"
-  ado_id: "00000000-0000-0000-0000-000000000000"
+  github_username: "your-username"   # GitHub
+  # ado_id: "00000000-..."           # ADO
 
 # ---------------------------------------------------------------------------
 # Team members — PRs by these people are tracked
@@ -30,10 +44,11 @@ owner:
 team_members:
   - name: "Teammate One"
     email: "teammate1@company.com"
-    ado_id: "00000000-0000-0000-0000-000000000000"
+    github_username: "teammate1"     # GitHub
+    # ado_id: "00000000-..."         # ADO
   - name: "Teammate Two"
     email: "teammate2@company.com"
-    ado_id: "00000000-0000-0000-0000-000000000000"
+    github_username: "teammate2"     # GitHub
 
 # ---------------------------------------------------------------------------
 # PR classification — which file paths indicate relevance to your feature
@@ -49,34 +64,19 @@ relevant_paths:
 relevant_pattern: "your-feature"
 
 # ---------------------------------------------------------------------------
-# Telemetry via Kusto (optional)
+# Telemetry via Kusto (optional, typically ADO only)
 # Remove this section entirely if you don't use Kusto.
 # ---------------------------------------------------------------------------
-telemetry:
-  enabled: true
-  cluster: "your-cluster.region.kusto.windows.net"
-  database: "your-database-id"
-
-  # Predefined queries — copied EXACTLY by the sync prompt. Never LLM-generated.
-  # Each query should be self-contained KQL that returns useful aggregations.
-  queries:
-    - name: "Overall reliability"
-      description: "Failure rates by scenario in the last 24h"
-      query: |
-        YourTable
-        | where Timestamp > ago(24h)
-        | where ScenarioName in ("scenario_a", "scenario_b")
-        | summarize Total = count(), Failures = countif(Status == "failure") by ScenarioName
-        | extend FailureRate = round(100.0 * Failures / Total, 2)
-
-    - name: "Error breakdown"
-      description: "Top errors by count"
-      query: |
-        YourTable
-        | where Timestamp > ago(24h)
-        | where Status == "failure"
-        | summarize Count = count() by ScenarioName, ErrorType
-        | order by Count desc
+# telemetry:
+#   enabled: true
+#   cluster: "your-cluster.region.kusto.windows.net"
+#   database: "your-database-id"
+#   queries:
+#     - name: "Overall reliability"
+#       query: |
+#         YourTable
+#         | where Timestamp > ago(24h)
+#         | summarize count() by Status
 
 # ---------------------------------------------------------------------------
 # Reference docs for drift detection (optional)
@@ -84,21 +84,19 @@ telemetry:
 #
 # Each doc needs:
 #   - name: filename (must exist in your output directory)
+#   - repo_path: (optional) path in git repo (for auto-PR)
 #   - package_map: maps package names to doc section names
 #   - known_patterns_section: (optional) section title with known error patterns
 #   - ignore_packages: (optional) shared packages to skip in unmapped detection
 # ---------------------------------------------------------------------------
 docs:
   - name: "your-feature-guide.md"
-    repo_path: "docs/your-feature/your-feature-guide.md"  # Path within the git repo (for auto-PR)
+    repo_path: "docs/your-feature/your-feature-guide.md"
     package_map:
-      # Simple mapping: package name → doc section name
       your-feature: "Architecture"
       your-feature-hooks: "Hooks Reference"
       your-feature-modals: "User Flows"
 
-      # Complex mapping: package that spans multiple sections
-      # Use title_hints to narrow down based on PR title keywords
       your-shared-package:
         default: "Shared Package (multiple sections)"
         title_hints:
@@ -107,13 +105,12 @@ docs:
           "config,flag,setting": "Configuration"
 
     ignore_packages:
-      - i18n-resources        # Localization strings — not feature-specific
-      - test-utilities        # Shared test helpers
+      - i18n-resources
+      - test-utilities
 
   - name: "your-telemetry-guide.md"
     repo_path: "docs/your-feature/your-telemetry-guide.md"
     known_patterns_section: "Known Failure Patterns"
-    # No package_map needed — this doc is checked for telemetry drift only
 
 # ---------------------------------------------------------------------------
 # Auto-PR creation (optional)
@@ -122,15 +119,14 @@ docs:
 # ---------------------------------------------------------------------------
 # auto_pr:
 #   enabled: true
-#   target_branch: "master"
+#   target_branch: "main"              # GitHub default: "main", ADO default: "master"
 #   branch_prefix: "autodocs/"
-#   work_item_ids: "12345"          # ADO work item ID(s) to link to each PR (optional)
+#   work_item_ids: "12345"             # ADO work item IDs (optional, ADO only)
 
 # ---------------------------------------------------------------------------
 # Multi-model verification (optional)
 # Runs the suggest prompt twice with different reasoning paths (same model).
 # Only suggestions where both runs agree are applied via auto-PR.
-# Suggestions that disagree stay in drift-suggestions.md for manual review.
 # ---------------------------------------------------------------------------
 # multi_model:
 #   enabled: true
@@ -138,4 +134,4 @@ docs:
 # ---------------------------------------------------------------------------
 # Metadata
 # ---------------------------------------------------------------------------
-last_verified: "2026-01-01"  # Update when you review the config for accuracy
+last_verified: "2026-01-01"

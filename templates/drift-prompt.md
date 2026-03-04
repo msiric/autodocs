@@ -82,7 +82,7 @@ For each file path, find its package by matching against the keys in the `packag
 The classification says "branch matches" or "title prefix" — no package path.
 
 Create ONE **LOW** confidence alert for all such PRs combined:
-"X feature PRs merged but file paths unavailable from ADO — manual review required."
+"X feature PRs merged but file paths unavailable — manual review required."
 
 Do NOT try to guess sections from PR titles when file paths are unavailable.
 

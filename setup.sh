@@ -25,30 +25,42 @@ mkdir -p "$OUTPUT_DIR"
 
 echo ""
 
-# --- Step 2: ADO details ---
+# --- Step 2: Platform ---
 
-read -rp "ADO organization name: " ADO_ORG
-read -rp "ADO project name: " ADO_PROJECT
-read -rp "ADO repository name: " ADO_REPO
+echo "Platform:"
+echo "  1. GitHub"
+echo "  2. Azure DevOps"
+read -rp "Select (1 or 2): " PLATFORM_CHOICE
 
-echo ""
-echo "Resolving repository GUID..."
-echo "You can either:"
-echo "  1. Let Claude Code resolve it (requires ADO MCP access)"
-echo "  2. Enter it manually (find in ADO → Project Settings → Repositories → URL)"
-echo ""
-read -rp "Enter repo GUID (or press Enter to resolve via Claude Code): " ADO_REPO_ID
+if [ "$PLATFORM_CHOICE" = "1" ]; then
+  PLATFORM="github"
+  read -rp "GitHub owner (user or org): " GH_OWNER
+  read -rp "GitHub repo name: " GH_REPO
+else
+  PLATFORM="ado"
+  read -rp "ADO organization name: " ADO_ORG
+  read -rp "ADO project name: " ADO_PROJECT
+  read -rp "ADO repository name: " ADO_REPO
 
-if [ -z "$ADO_REPO_ID" ]; then
-  ADO_REPO_ID=$(cd "$REPO_DIR" && claude -p "Call mcp__azure-devops__repo_get_repo_by_name_or_id with project=$ADO_PROJECT, repositoryNameOrId=$ADO_REPO. Return ONLY the repository ID (GUID), nothing else." \
-    --allowedTools "mcp__azure-devops__repo_get_repo_by_name_or_id" \
-    --output-format text 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1) || true
+  echo ""
+  echo "Resolving repository GUID..."
+  echo "You can either:"
+  echo "  1. Let Claude Code resolve it (requires ADO MCP access)"
+  echo "  2. Enter it manually (find in ADO → Project Settings → Repositories → URL)"
+  echo ""
+  read -rp "Enter repo GUID (or press Enter to resolve via Claude Code): " ADO_REPO_ID
 
   if [ -z "$ADO_REPO_ID" ]; then
-    echo "Error: Could not resolve repo GUID. Enter it manually."
-    read -rp "Repo GUID: " ADO_REPO_ID
-  else
-    echo "Resolved: $ADO_REPO_ID"
+    ADO_REPO_ID=$(cd "$REPO_DIR" && claude -p "Call mcp__azure-devops__repo_get_repo_by_name_or_id with project=$ADO_PROJECT, repositoryNameOrId=$ADO_REPO. Return ONLY the repository ID (GUID), nothing else." \
+      --allowedTools "mcp__azure-devops__repo_get_repo_by_name_or_id" \
+      --output-format text 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1) || true
+
+    if [ -z "$ADO_REPO_ID" ]; then
+      echo "Error: Could not resolve repo GUID. Enter it manually."
+      read -rp "Repo GUID: " ADO_REPO_ID
+    else
+      echo "Resolved: $ADO_REPO_ID"
+    fi
   fi
 fi
 
@@ -58,7 +70,9 @@ echo ""
 
 read -rp "Your name (feature owner): " OWNER_NAME
 read -rp "Your email: " OWNER_EMAIL
-read -rp "Your ADO ID (GUID, find in ADO profile): " OWNER_ADO_ID
+if [ "$PLATFORM" = "ado" ]; then
+  read -rp "Your ADO ID (GUID, find in ADO profile): " OWNER_ADO_ID
+fi
 
 echo ""
 
@@ -97,16 +111,28 @@ else
 # Edit this file to customize team, paths, queries, and doc mappings.
 # Changes take effect on the next sync (no need to re-run setup).
 
+platform: "$PLATFORM"
+
+$(if [ "$PLATFORM" = "github" ]; then
+cat <<GITHUB
+github:
+  owner: "$GH_OWNER"
+  repo: "$GH_REPO"
+GITHUB
+else
+cat <<ADO
 ado:
   org: "$ADO_ORG"
   project: "$ADO_PROJECT"
   repo: "$ADO_REPO"
   repo_id: "$ADO_REPO_ID"
+ADO
+fi)
 
 owner:
   name: "$OWNER_NAME"
   email: "$OWNER_EMAIL"
-  ado_id: "$OWNER_ADO_ID"
+$(if [ "$PLATFORM" = "github" ]; then echo "  github_username: \"$OWNER_NAME\"  # Update with your GitHub username"; else echo "  ado_id: \"$OWNER_ADO_ID\""; fi)
 
 # Add your team members here (uncomment and edit)
 # team_members:

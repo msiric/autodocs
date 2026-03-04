@@ -91,6 +91,19 @@ The `git checkout -` at the end returns to the previous branch so the repo is no
 
 ## Step 4: Open Pull Request
 
+Check `platform` from config.
+
+**If platform is "github":**
+Use Bash to create the PR:
+```
+gh pr create -R <github.owner>/<github.repo> \
+  --title "docs: autodocs suggested updates — <YYYY-MM-DD>" \
+  --body "<description>" \
+  --base <auto_pr.target_branch> \
+  --head <branch_prefix><YYYY-MM-DD>
+```
+
+**If platform is "ado":**
 Use `mcp__azure-devops__repo_create_pull_request` with:
 - `repositoryId`: from config `ado.repo_id`
 - `sourceRefName`: `refs/heads/<branch_prefix><YYYY-MM-DD>`
