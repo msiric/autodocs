@@ -2,11 +2,9 @@
 date: 2026-03-03
 sync_status: success
 pr_count: 1
-channel_pages_prs: 0
-mario_reviews: 0
-mario_authored: 0
-create_reliability: 99.35
-load_reliability: 99.89
+feature_prs: 0
+owner_reviews: 0
+owner_authored: 0
 anomaly_count: 3
 ---
 # Work Report — 2026-03-03

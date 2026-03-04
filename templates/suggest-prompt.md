@@ -61,7 +61,7 @@ Now compare the section content against the PR changes. Determine which operatio
 
 For each suggestion, generate:
 
-- **FIND**: The EXACT text from the doc that needs to change (for REPLACE) or the line to insert after (for INSERT AFTER). This MUST be copied verbatim from the doc — do not paraphrase, reformat, or summarize. Keep it as short as possible while being unique (a single line or table row is ideal).
+- **FIND**: The EXACT text from the doc that needs to change (for REPLACE) or the line to insert after (for INSERT AFTER). This MUST be copied verbatim from the doc — do not paraphrase, reformat, or summarize. Keep it as short as possible while being unique (a single line or table row is ideal). If the text appears more than once in the doc, include enough surrounding context (the preceding header or a unique adjacent line) to make it unambiguous.
 - **REPLACE WITH** or **INSERT AFTER**: The new text. Preserve the doc's existing tone, style, and formatting. Make the minimum change needed.
 - **REASONING**: One sentence explaining what changed and why.
 

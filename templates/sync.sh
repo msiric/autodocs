@@ -157,7 +157,8 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       # and includes REVIEW/DISPUTED/UNMATCHED suggestions in the PR description
       if [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
          && grep -q "auto_pr" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
-         && [ "$(grep -c 'suggestion_count: 0' "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null)" -eq 0 ]; then
+         && [ -f "$OUTPUT_DIR/drift-suggestions.md" ] \
+         && ! grep -q "suggestion_count: 0" "$OUTPUT_DIR/drift-suggestions.md"; then
 
         APPLY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/apply-prompt.md")" \
           --add-dir "$OUTPUT_DIR" \

@@ -69,11 +69,11 @@ If `gh` fails or returns an error, skip Steps 3-5 entirely. Set `sync_status: pa
 
 Use Bash to fetch merged merge requests:
 ```
-glab mr list --merged -F json -R <gitlab.project_path> --per-page 100
+glab mr list --merged -F json -R <gitlab.project_path> --updated-after <lookback_date_YYYY-MM-DD> --per-page 100
 ```
 
-This returns MRs as JSON. For each MR:
-- Filter by `merged_at` within the lookback window
+This returns MRs as JSON, filtered by update date. For each MR:
+- Verify `merged_at` is within the lookback window
 - Match `author.username` against `gitlab_username` in config (owner + team members)
 - Extract `merge_commit_sha` for file changes:
   ```
@@ -89,11 +89,11 @@ If `glab` fails or returns an error, skip Steps 3-5 entirely. Set `sync_status: 
 Use Bash to fetch merged pull requests:
 ```
 curl -s -H "Authorization: Bearer $BITBUCKET_TOKEN" \
-  "https://api.bitbucket.org/2.0/repositories/<bitbucket.workspace>/<bitbucket.repo>/pullrequests?state=MERGED&pagelen=50"
+  "https://api.bitbucket.org/2.0/repositories/<bitbucket.workspace>/<bitbucket.repo>/pullrequests?state=MERGED&pagelen=50&sort=-updated_on"
 ```
 
-This returns a JSON response with a `values` array. For each PR in the array:
-- Filter by `updated_on` within the lookback window
+This returns a JSON response with a `values` array, sorted by most recent. For each PR in the array:
+- Verify `updated_on` is within the lookback window (stop when you reach PRs older than the window)
 - Match `author.display_name` or `author.nickname` against `bitbucket_username` in config
 - Extract `merge_commit.hash` for file changes:
   ```
@@ -150,6 +150,8 @@ If file paths are unavailable for a PR (git diff-tree fails, files array empty),
 ### Collect for each PR:
 
 ID, title, description (max 500 chars), author name, merge timestamp, the list of changed file paths, and review thread summary (if available).
+
+If no PRs pass the filter (empty lookback window or no team member PRs), write the daily-report.md with `pr_count: 0`, `feature_prs: 0`, and `## Team PRs\nNo PRs merged in the lookback window.` Skip Steps 4-5.
 
 ## Step 4: Classify PRs (Deterministic Path Matching)
 

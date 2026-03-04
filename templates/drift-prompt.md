@@ -96,7 +96,7 @@ From the Anomalies section in daily-report.md (Step 1):
 
 1. **Group by section**: If multiple PRs map to the same (doc, section), combine them into one alert listing all PR numbers.
 
-2. **Deduplicate against drift-status.md**: If there is already an unchecked `- [ ]` entry for the same (doc, section), do NOT create a duplicate. Instead, append today's PR number(s) to that existing entry's trigger field when writing drift-status.md.
+2. **Deduplicate against drift-status.md**: If there is already an unchecked `- [ ]` entry for the same (doc, section), do NOT create a duplicate. Instead, append today's PR number(s) to that existing entry's trigger field and update the entry's date to today when writing drift-status.md.
 
 ## Step 9: Manage Alert Lifecycle
 

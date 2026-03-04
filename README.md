@@ -105,8 +105,16 @@ Your repo (git)          Azure DevOps              Kusto (optional)
 ### Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- [Azure DevOps MCP](https://github.com/microsoft/azure-devops-mcp) configured in your project's `.claude/settings.json`
 - Git repo checked out locally
+- Platform CLI:
+
+| Platform | Tool | Setup |
+|----------|------|-------|
+| GitHub | [`gh`](https://cli.github.com/) | Install and run `gh auth login` |
+| GitLab | [`glab`](https://docs.gitlab.com/cli/) | Install and run `glab auth login` |
+| Bitbucket | `curl` | Set `BITBUCKET_TOKEN` environment variable |
+| Azure DevOps | [ADO MCP](https://github.com/microsoft/azure-devops-mcp) | Configure in `.claude/settings.json` |
+
 - (Optional) [Kusto MCP](https://github.com/nicepkg/kusto-mcp) for telemetry monitoring
 
 ### Setup
