@@ -60,8 +60,20 @@ This returns ALL data in one call. For each PR in the JSON array:
 - `mergedAt` — merge timestamp (filter to lookback window)
 - `author.login` — match against `github_username` in config (owner + team members)
 - `files` — array of `{ path, additions, deletions }` — these are the changed file paths
-- `mergeCommit.oid` — merge commit SHA (use as fallback with `git diff-tree` if `files` is empty)
+- `mergeCommit.oid` — merge commit SHA
 - `reviews` — array of `{ body, state, author.login }` — summarize human reviews (ignore bot reviews)
+
+For each PR, also get change types (A/M/D/R) by running:
+```
+git diff-tree --no-commit-id --name-status -M -r <mergeCommit.oid>
+```
+This provides the change type per file that the `gh` JSON doesn't include.
+
+For mapped files (directories matching `package_map`), get targeted diffs:
+```
+git diff -U3 <mergeCommit.oid>^..<mergeCommit.oid> -- <file>
+```
+Same filtering and budget rules: skip tests/generated files, 150 lines per PR max.
 
 If `gh` fails or returns an error, skip Steps 3-5 entirely. Set `sync_status: partial`.
 
@@ -75,10 +87,16 @@ glab mr list --merged -F json -R <gitlab.project_path> --updated-after <lookback
 This returns MRs as JSON, filtered by update date. For each MR:
 - Verify `merged_at` is within the lookback window
 - Match `author.username` against `gitlab_username` in config (owner + team members)
-- Extract `merge_commit_sha` for file changes:
+- Extract `merge_commit_sha` for file changes with change types:
   ```
-  git diff-tree --no-commit-id --name-only -r <merge_commit_sha>
+  git diff-tree --no-commit-id --name-status -M -r <merge_commit_sha>
   ```
+  This returns change type + path per file (M=modified, A=added, D=deleted, R=renamed).
+- For mapped files (directories matching `package_map`), get targeted diffs:
+  ```
+  git diff -U3 <merge_commit_sha>^..<merge_commit_sha> -- <file>
+  ```
+  Same filtering and budget rules as other platforms (skip tests/generated, 150 lines per PR).
 - Extract `title` and `description` (truncate description to 500 chars)
 - For reviews: the JSON may include approvals. Summarize human review comments if available.
 
@@ -95,10 +113,16 @@ curl -s -H "Authorization: Bearer $BITBUCKET_TOKEN" \
 This returns a JSON response with a `values` array, sorted by most recent. For each PR in the array:
 - Verify `updated_on` is within the lookback window (stop when you reach PRs older than the window)
 - Match `author.display_name` or `author.nickname` against `bitbucket_username` in config
-- Extract `merge_commit.hash` for file changes:
+- Extract `merge_commit.hash` for file changes with change types:
   ```
-  git diff-tree --no-commit-id --name-only -r <merge_commit_hash>
+  git diff-tree --no-commit-id --name-status -M -r <merge_commit_hash>
   ```
+  This returns change type + path per file (M=modified, A=added, D=deleted, R=renamed).
+- For mapped files, get targeted diffs:
+  ```
+  git diff -U3 <merge_commit_hash>^..<merge_commit_hash> -- <file>
+  ```
+  Same filtering and budget rules as other platforms.
 - Extract `title` and `description` (truncate description to 500 chars)
 - For reviews: check the `reviewers` array in the PR response for approval status.
 

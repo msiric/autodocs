@@ -7,12 +7,12 @@ When your team merges PRs that change code described in your documentation, auto
 ## How it works
 
 ```
-Your repo (git)          Azure DevOps              Kusto (optional)
-     |                       |                          |
-     |   git diff-tree       |   merged PRs             |   telemetry
-     |   (changed files)     |   (+ descriptions,       |   (error patterns)
-     |                       |      review threads)     |
-     v                       v                          v
+Your repo (git)         GitHub / ADO / GitLab / Bitbucket    Kusto (optional)
+     |                       |                                    |
+     |   git diff-tree       |   merged PRs (+ descriptions,     |   telemetry
+     |   (change types,      |      review threads, diffs)       |   (error patterns)
+     |    A/M/D/R + diffs)   |                                    |
+     v                       v                                    v
   +---------------------------------------------------------+
   |              Claude Code (headless mode)                |
   |                                                         |

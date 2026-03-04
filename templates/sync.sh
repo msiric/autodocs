@@ -62,11 +62,11 @@ case "$PLATFORM" in
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(gh:*),Bash(git:*)"
     ;;
   gitlab)
-    SYNC_TOOLS="Bash(glab:*),Bash(git:*),Write"
+    SYNC_TOOLS="Bash(glab:*),Bash(git:*),mcp__kusto-mcp__kusto_query,Write"
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(glab:*),Bash(git:*)"
     ;;
   bitbucket)
-    SYNC_TOOLS="Bash(curl:*),Bash(git:*),Write"
+    SYNC_TOOLS="Bash(curl:*),Bash(git:*),mcp__kusto-mcp__kusto_query,Write"
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(curl:*),Bash(git:*)"
     ;;
   *)  # ado (default)

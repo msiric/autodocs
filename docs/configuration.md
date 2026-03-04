@@ -6,19 +6,46 @@ autodocs uses a single `config.yaml` file for all runtime settings. Prompts read
 
 ## Full Schema
 
-### `ado` (required)
+### `platform` (required)
 
-Azure DevOps connection details.
+The git hosting platform. Determines how PRs are fetched and auto-PRs are created.
 
 ```yaml
-ado:
-  org: "your-org"           # Organization name
-  project: "your-project"   # Project name
-  repo: "your-repo"         # Repository name (for display only)
-  repo_id: "guid-here"      # Repository GUID (setup.sh resolves this)
+platform: github  # or: gitlab, bitbucket, ado
 ```
 
-**Finding the repo GUID:** Run `setup.sh` (resolves automatically), or find it in ADO → Project Settings → Repositories → click repo → GUID is in the URL.
+### Platform connection (one required, matching `platform`)
+
+**GitHub:**
+```yaml
+github:
+  owner: "your-username"     # GitHub user or organization
+  repo: "your-repo"          # Repository name
+```
+
+**GitLab:**
+```yaml
+gitlab:
+  host: "gitlab.com"         # or self-hosted: "gitlab.mycompany.com"
+  project_path: "group/repo" # full project path
+```
+
+**Bitbucket:**
+```yaml
+bitbucket:
+  workspace: "my-workspace"
+  repo: "my-repo"
+# Auth: set BITBUCKET_TOKEN environment variable
+```
+
+**Azure DevOps:**
+```yaml
+ado:
+  org: "your-org"
+  project: "your-project"
+  repo: "your-repo"
+  repo_id: "guid-here"      # Repository GUID (setup.sh resolves this)
+```
 
 ### `owner` (required)
 

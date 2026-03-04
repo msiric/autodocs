@@ -89,13 +89,13 @@ ADO MCP                         Local Git Repo
    +----------------------------------+
                                       |
                          git diff-tree --no-commit-id \
-                           --name-only -r be0c278...
+                           --name-status -M -r be0c278...
                                       |
                                       v
-                         packages/components/fluid/src/error/map.ts
-                         packages/components/fluid/src/loader.ts
-                         packages/data/resolvers/worker.ts
-                         ...
+                         M    packages/components/fluid/src/error/map.ts
+                         A    packages/components/fluid/src/new-handler.ts
+                         R100 packages/old-name.ts → packages/new-name.ts
+                         D    packages/legacy/removed.ts
 ```
 
 This requires:
