@@ -1,0 +1,126 @@
+name: autodocs
+
+on:
+  schedule:
+    - cron: '0 17 * * 1-5'   # Weekdays at 17:00 UTC (daily sync)
+    - cron: '0 17 * * 6'     # Saturday at 17:00 UTC (structural scan)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'sync'
+        type: choice
+        options:
+          - sync
+          - sync-dry-run
+          - structural-scan
+
+concurrency:
+  group: autodocs-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  AUTODOCS_DIR: .autodocs
+
+jobs:
+  autodocs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: |
+          npm install -g @anthropic-ai/claude-code@latest
+          pip install pyyaml
+
+      - name: Restore state from autodocs-state branch
+        run: |
+          STATE_FILES="drift-status.md drift-log.md activity-log.md sync-status.md last-successful-run metrics.jsonl"
+          if git ls-remote --heads origin autodocs-state | grep -q autodocs-state; then
+            git fetch origin autodocs-state
+            for f in $STATE_FILES; do
+              git checkout origin/autodocs-state -- "$AUTODOCS_DIR/$f" 2>/dev/null || true
+            done
+            git checkout origin/autodocs-state -- "$AUTODOCS_DIR/feedback/" 2>/dev/null || true
+          fi
+
+      - name: Determine run mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "0 17 * * 6" ]; then
+              echo "script=autodocs-structural-scan.sh" >> $GITHUB_OUTPUT
+              echo "flag=" >> $GITHUB_OUTPUT
+            else
+              echo "script=autodocs-sync.sh" >> $GITHUB_OUTPUT
+              echo "flag=" >> $GITHUB_OUTPUT
+            fi
+          else
+            MODE="${{ inputs.mode }}"
+            if [ "$MODE" = "structural-scan" ]; then
+              echo "script=autodocs-structural-scan.sh" >> $GITHUB_OUTPUT
+              echo "flag=" >> $GITHUB_OUTPUT
+            elif [ "$MODE" = "sync-dry-run" ]; then
+              echo "script=autodocs-sync.sh" >> $GITHUB_OUTPUT
+              echo "flag=--dry-run" >> $GITHUB_OUTPUT
+            else
+              echo "script=autodocs-sync.sh" >> $GITHUB_OUTPUT
+              echo "flag=" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Run autodocs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OUTPUT_DIR: ${{ github.workspace }}/${{ env.AUTODOCS_DIR }}
+          REPO_DIR: ${{ github.workspace }}
+        run: bash "$OUTPUT_DIR/${{ steps.mode.outputs.script }}" ${{ steps.mode.outputs.flag }}
+
+      - name: Save state to autodocs-state branch
+        if: always()
+        run: |
+          # Collect state files
+          STATE_DIR=$(mktemp -d)
+          cp -r "$AUTODOCS_DIR"/*.md "$STATE_DIR/" 2>/dev/null || true
+          cp "$AUTODOCS_DIR/metrics.jsonl" "$STATE_DIR/" 2>/dev/null || true
+          cp "$AUTODOCS_DIR/last-successful-run" "$STATE_DIR/" 2>/dev/null || true
+          cp -r "$AUTODOCS_DIR/feedback" "$STATE_DIR/" 2>/dev/null || true
+
+          # Switch to state branch
+          if git ls-remote --heads origin autodocs-state | grep -q autodocs-state; then
+            git fetch origin autodocs-state
+            git checkout autodocs-state
+          else
+            git checkout --orphan autodocs-state
+            git rm -rf . 2>/dev/null || true
+          fi
+
+          # Update state
+          mkdir -p "$AUTODOCS_DIR/feedback"
+          cp -r "$STATE_DIR"/* "$AUTODOCS_DIR/" 2>/dev/null || true
+          cp -r "$STATE_DIR/feedback" "$AUTODOCS_DIR/" 2>/dev/null || true
+          git add "$AUTODOCS_DIR/"
+          git config user.name "autodocs[bot]"
+          git config user.email "autodocs[bot]@users.noreply.github.com"
+          git diff --cached --quiet || git commit -m "autodocs state $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push origin HEAD:autodocs-state --force
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "autodocs: pipeline failed $(date -u +%Y-%m-%d)" \
+            --body "The autodocs pipeline failed. Check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details." \
+            --label "autodocs" 2>/dev/null || true

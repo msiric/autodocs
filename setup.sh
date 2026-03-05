@@ -782,6 +782,19 @@ else
   echo "  0 $SCHEDULE_HOUR * * 6 $OUTPUT_DIR/autodocs-structural-scan.sh"
 fi
 
+# --- CI option ---
+
+if ! $QUICK_MODE; then
+  echo ""
+  if confirm "Set up GitHub Actions workflow?"; then
+    mkdir -p "$REPO_DIR/.github/workflows"
+    cp "$TEMPLATES_DIR/autodocs-workflow.yml" "$REPO_DIR/.github/workflows/autodocs.yml"
+    echo "Workflow created: $REPO_DIR/.github/workflows/autodocs.yml"
+    echo "  Add ANTHROPIC_API_KEY to repository secrets."
+    echo "  Commit and push to activate."
+  fi
+fi
+
 # --- Done ---
 
 echo ""
