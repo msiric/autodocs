@@ -259,16 +259,79 @@ cmd_config() {
   ${EDITOR:-vi} "$config_file"
 }
 
+cmd_analyze() {
+  local repo_dir="${1:-.}"
+  if [ ! -d "$repo_dir/.git" ]; then
+    echo "Error: $repo_dir is not a git repository."
+    exit 1
+  fi
+
+  echo "=== Repository Analysis ==="
+  echo ""
+
+  # Count files (exclude .git, node_modules, vendor, .venv)
+  local file_count
+  file_count=$(find "$repo_dir" -type f \
+    -not -path '*/.git/*' -not -path '*/node_modules/*' \
+    -not -path '*/vendor/*' -not -path '*/.venv/*' \
+    2>/dev/null | wc -l | tr -d ' ')
+  echo "Files: $file_count"
+
+  # Classify repo size
+  if [ "$file_count" -lt 50 ]; then
+    echo "Repo type: SMALL (< 50 files)"
+    echo "  → File-level or basename matching recommended for package_map"
+  elif [ "$file_count" -lt 500 ]; then
+    echo "Repo type: MEDIUM (50-500 files)"
+    echo "  → Directory-level matching recommended for package_map"
+  else
+    echo "Repo type: LARGE (500+ files)"
+    echo "  → Directory-level matching + exclude_patterns recommended"
+  fi
+
+  # Detect languages
+  echo ""
+  echo "Languages detected:"
+  [ -f "$repo_dir/package.json" ] && echo "  - TypeScript/JavaScript (package.json)"
+  [ -f "$repo_dir/go.mod" ] && echo "  - Go (go.mod)"
+  ([ -f "$repo_dir/pyproject.toml" ] || [ -f "$repo_dir/setup.py" ]) && echo "  - Python"
+  ([ -f "$repo_dir/pom.xml" ] || [ -f "$repo_dir/build.gradle" ]) && echo "  - Java"
+  [ -f "$repo_dir/Cargo.toml" ] && echo "  - Rust (Cargo.toml)"
+
+  # Find docs
+  echo ""
+  echo "Documentation found:"
+  find "$repo_dir" -name "*.md" -not -path '*/.git/*' -not -path '*/node_modules/*' \
+    -not -name "CHANGELOG.md" -not -name "LICENSE.md" 2>/dev/null | while read -r doc; do
+    local sections lines
+    sections=$(grep -c "^## " "$doc" 2>/dev/null || echo "0")
+    lines=$(wc -l < "$doc" 2>/dev/null | tr -d ' ')
+    local mode_hint=""
+    if [ "$sections" -lt 5 ] && [ "$lines" -lt 500 ]; then
+      mode_hint=" (adaptive: holistic context)"
+    elif [ "$sections" -ge 5 ]; then
+      mode_hint=" (adaptive: per-section)"
+    else
+      mode_hint=" (adaptive: section + adjacent)"
+    fi
+    echo "  $(basename "$doc") — $lines lines, $sections sections$mode_hint"
+  done
+
+  echo ""
+  echo "Run 'setup.sh' to generate a config based on this analysis."
+}
+
 # --- Subcommand routing ---
 case "${1:-}" in
   team)   shift; cmd_team "$@"; exit 0 ;;
   docs)   shift; cmd_docs "$@"; exit 0 ;;
   paths)  shift; cmd_paths "$@"; exit 0 ;;
   config) shift; cmd_config "$@"; exit 0 ;;
+  analyze) shift; cmd_analyze "$@"; exit 0 ;;
   --quick) QUICK_MODE=true ;;
   "")     ;; # no args = full setup
   -*)     ;; # other flags
-  *)      echo "Usage: setup.sh [--quick] | team | docs | paths | config"; exit 1 ;;
+  *)      echo "Usage: setup.sh [--quick] | team | docs | paths | config | analyze"; exit 1 ;;
 esac
 
 QUICK_MODE=${QUICK_MODE:-false}

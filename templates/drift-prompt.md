@@ -44,6 +44,8 @@ Extract the `docs` section. For each doc entry:
 For each doc in config that has a `package_map`:
 - Read `${OUTPUT_DIR}/<doc.name>`
 - Extract the Table of Contents (section headers) from the doc
+- Build a heading hierarchy. If any section name appears more than once (e.g., two sections named "Examples"), use 2-level breadcrumbs for disambiguation: "Error Handling > Examples" vs "Authentication > Examples". Use breadcrumbs in alerts ONLY when section names are non-unique. For unique names, use the simple name.
+- Count the number of `##` headers. If the doc has 0 sections, note it as a flat doc (will target "Main" section).
 
 ## Step 4: Read Known Patterns
 
@@ -75,7 +77,14 @@ Create ONE **LOW** confidence alert: "Large refactoring PR (N files) — manual 
 
 If the PR has a `Files:` list, use the individual file paths and change types to detect drift.
 
-For each file path, find its package by matching against the keys in the `package_map` from config: check if the file path contains `/<key>/` (the key enclosed by path separators — this ensures exact directory name matching, not substring). If multiple keys match, use the LONGEST matching key.
+For each file path, find its matching `package_map` key using these rules (try in order, first match wins):
+
+1. **Exact path match:** If any key contains `/` and the file path ends with that key → use it.
+2. **Glob match:** If any key contains `*` and the file path matches the glob pattern → use it.
+3. **Directory match:** If any key (without `/` or `*`) appears as a directory segment in the file path (check for `/<key>/`) → use it. This is the default matching behavior.
+4. **Basename match:** If any key (without `/` or `*`) matches the file's basename (filename only, not path) → use it. BUT: if a basename key matches multiple files with different parent directories in the same PR, do NOT match any of them — emit a warning instead: "Ambiguous basename key matches N files — use a more specific path."
+
+If multiple keys match at the same priority level, use the LONGEST key. If `source_roots` is configured, strip the matching source root prefix from the file path before applying these rules.
 
 1. **Package lookup by change type:**
    - **M (Modified):** Look up `package_map` → create **HIGH** alert for the mapped section. If `title_hints` are configured, use them to narrow the section.

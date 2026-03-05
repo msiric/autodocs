@@ -158,7 +158,7 @@ For each PR that passes the filter:
    ```
    git diff -U3 <commit>^..<commit> -- <file>
    ```
-   Only diff files whose directory matches a key in the config's `package_map`. Skip test files (`*.test.*`, `*.spec.*`), generated files (`*.generated.*`, `*.min.*`, `dist/`, `build/`), and lock files. Limit to 150 lines of diff total per PR — if exceeded, stop and note "Diff truncated."
+   Only diff files whose directory matches a key in the config's `package_map`. Skip test files (`*.test.*`, `*.spec.*`), generated files (`*.generated.*`, `*.min.*`, `dist/`, `build/`), and lock files. If config has `exclude_patterns`, also skip files matching those patterns. Limit to 150 lines of diff total per PR — if exceeded, stop and note "Diff truncated."
 
 5. Extract the PR description (the `description` field, or `completionOptions.mergeCommitMessage` if description is empty). If longer than 500 characters, truncate with "..."
 

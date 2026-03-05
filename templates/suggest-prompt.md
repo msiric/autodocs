@@ -54,8 +54,12 @@ For each remaining alert from Step 1:
 
 1. Identify the doc and section from the alert entry.
 2. Read the doc file from `${OUTPUT_DIR}/<doc name>`.
-3. Find the section by its header name. Read the section content (from the header to the next same-level header or end of file).
-4. Identify the PR(s) that triggered the alert.
+3. Count the number of `##` headers in the doc:
+   - **≥5 sections:** Find the target section by header name. Read that section's content (from header to next same-level header or end of file).
+   - **1-4 sections AND <500 lines:** Read the ENTIRE doc for fuller context. Still target the specific section for FIND/REPLACE, but use the full doc context for better understanding.
+   - **1-4 sections AND ≥500 lines:** Read the target section plus its adjacent sections (one before, one after) for context.
+   - **0 sections (no `##` headers):** Treat the entire doc as one section called "Main". Generate suggestions for the whole doc.
+4. Identify the PR(s) that triggered the alert. If multiple PRs are listed in the same alert (e.g., "PR #42, #47, #51"), sort them by merge date and read ALL their diffs together. Generate ONE combined suggestion. If more than 5 PRs are grouped, analyze only the 5 most recent; mention older ones in the summary. If a later PR's changes conflict with an earlier one's, set confidence to REVIEW.
 5. If the PR is in today's daily-report.md, get its Description, Files, and Diff fields. If not, use the PR title from the alert entry.
 
 **Using the Diff field:** If the PR has a `Diff:` field, use the actual code diff to understand EXACTLY what changed. The diff shows function renames, parameter additions, behavioral changes, and deleted code. Use this for precise FIND/REPLACE suggestions instead of inferring from the PR title.

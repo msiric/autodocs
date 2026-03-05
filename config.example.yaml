@@ -83,6 +83,28 @@ relevant_paths:
 relevant_pattern: "your-feature"
 
 # ---------------------------------------------------------------------------
+# Exclude patterns (optional)
+# Files matching these patterns are skipped during diff analysis.
+# Added to the defaults (*.test.*, *.spec.*, dist/, build/, *.generated.*, lock files).
+# ---------------------------------------------------------------------------
+# exclude_patterns:
+#   - "test_*.py"          # Python tests
+#   - "*_test.go"          # Go tests
+#   - "target/"            # Java/Rust build output
+#   - "__pycache__/"       # Python bytecode
+
+# ---------------------------------------------------------------------------
+# Source roots (optional)
+# Directories where source code lives. Used to strip prefixes when extracting
+# package names from file paths. For src/auth/handler.ts with source_roots: ["src/"],
+# the extracted package is "auth" (not "src").
+# ---------------------------------------------------------------------------
+# source_roots:
+#   - "src/"               # TypeScript/Python
+#   - "cmd/"               # Go binaries
+#   - "packages/"          # Monorepo packages
+
+# ---------------------------------------------------------------------------
 # Telemetry via Kusto (optional, typically ADO only)
 # Remove this section entirely if you don't use Kusto.
 # ---------------------------------------------------------------------------
