@@ -228,6 +228,45 @@ if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# Stale PR management (two-phase: warn then close, deterministic)
+STALE_HELPER="$SCRIPTS_DIR/stale-helper.py"
+if [ -f "$FEEDBACK_FILE" ] && [ -f "$STALE_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+  # Collect stale labels from platform (which open PRs have autodocs:stale)
+  STALE_LABELS="{}"
+  case "$PLATFORM" in
+    github)
+      if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
+        STALE_LABELS=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
+          --label "autodocs:stale" --state open \
+          --json number --jq '[.[] | {(.number|tostring): true}] | add // {}' 2>/dev/null || echo "{}")
+      fi
+      ;;
+  esac
+
+  stale_output=$(python3 "$STALE_HELPER" "$FEEDBACK_FILE" "$OUTPUT_DIR/config.yaml" "$REPO_DIR" \
+    list-stale "$(date +%Y-%m-%d)" "$STALE_LABELS" 2>/dev/null)
+  if [ -n "$stale_output" ]; then
+    while IFS='|' read -r pr_num action reason; do
+      [ -z "$pr_num" ] && continue
+      case "$PLATFORM" in
+        github)
+          if [ "$action" = "warn" ]; then
+            gh pr comment "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" \
+              --body "**autodocs**: $reason. This PR will be auto-closed in 7 days if no activity. Add label \`autodocs:keep-open\` to prevent." 2>/dev/null || true
+            gh pr edit "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" --add-label "autodocs:stale" 2>/dev/null || true
+          elif [ "$action" = "close" ]; then
+            gh pr comment "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" \
+              --body "**autodocs**: Closing — $reason. A fresh PR will be generated if changes are still needed." 2>/dev/null || true
+            gh pr close "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" 2>/dev/null || true
+            python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" update-pr "$pr_num" closed 2>/dev/null || true
+          fi
+          echo "[$TIMESTAMP] STALE: $action PR #$pr_num ($reason)" >> "$LOG_FILE"
+          ;;
+      esac
+    done <<< "$stale_output"
+  fi
+fi
+
 # Check open PR limit (prevent accumulation)
 MAX_OPEN=$(read_config limits.max_open_prs || true)
 [ -z "$MAX_OPEN" ] && MAX_OPEN=10
