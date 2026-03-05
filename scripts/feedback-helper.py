@@ -94,6 +94,28 @@ def handle_acceptance_rate(data):
     print(f"{rate:.2f}")
 
 
+def handle_discover(data, args):
+    """Backfill open-prs.json from platform PR search results (JSON string)."""
+    try:
+        discovered = json.loads(args[0])
+    except (json.JSONDecodeError, IndexError):
+        return
+    platform = args[1] if len(args) > 1 else "github"
+    for pr in discovered:
+        number = pr.get("number")
+        if not number:
+            continue
+        if any(p.get("pr_number") == number for p in data):
+            continue
+        data.append({
+            "pr_number": number,
+            "platform": platform,
+            "date": str(pr.get("createdAt", ""))[:10],
+            "state": "open",
+            "suggestions": [],
+        })
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -119,6 +141,9 @@ def main():
         handle_pending_sections(data)
     elif operation == "acceptance-rate":
         handle_acceptance_rate(data)
+    elif operation == "discover":
+        handle_discover(data, args)
+        save_data(path, data)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)

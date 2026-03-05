@@ -35,7 +35,9 @@ EOF
   [ "$(read_status status)" = "success" ]
   [ "$(read_status drift)" = "success" ]
   [ "$(read_status suggest)" = "success" ]
-  [ "$(read_status verify)" = "success" ]
+  # Verify is now shadow mode (logs but doesn't gate)
+  verify_status=$(read_status verify)
+  [[ "$verify_status" == "shadow-success" || "$verify_status" == "skipped" ]]
   [ "$(read_status apply)" = "success" ]
 }
 

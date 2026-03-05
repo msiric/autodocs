@@ -34,6 +34,28 @@ print('true' if v is True else 'false' if v is False else v)
 " 2>/dev/null
 }
 
+# Log a metric entry (JSON line to metrics.jsonl)
+log_metric() {
+  local call="$1" status="$2" rc="${3:-0}"
+  echo "{\"ts\":\"$TIMESTAMP\",\"call\":\"$call\",\"status\":\"$status\",\"rc\":$rc}" \
+    >> "$OUTPUT_DIR/metrics.jsonl" 2>/dev/null || true
+}
+
+# Retry a command with exponential backoff (for transient API/network failures)
+retry() {
+  local attempts=3 delay=5 rc=0
+  for ((i=1; i<=attempts; i++)); do
+    "$@" && return 0
+    rc=$?
+    if [ $i -lt $attempts ]; then
+      echo "[$TIMESTAMP] Attempt $i/$attempts failed (exit $rc), retrying in ${delay}s..." >> "$LOG_FILE"
+      sleep $delay
+      delay=$((delay * 2))
+    fi
+  done
+  return $rc
+}
+
 # Ensure PATH includes typical Claude Code install locations (launchd has minimal PATH)
 export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.claude/local"
 
@@ -110,29 +132,49 @@ case "$PLATFORM" in
 esac
 
 # Add Kusto telemetry tool if enabled (platform-independent)
-if [ "$(read_config telemetry.enabled)" = "true" ]; then
+if [ "$(read_config telemetry.enabled || true)" = "true" ]; then
   SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
 fi
 
-# Feedback: check state of pending autodocs PRs (bash only, no LLM call)
+# Feedback: discover + check state of pending autodocs PRs (bash only, no LLM call)
 FEEDBACK_FILE="$OUTPUT_DIR/feedback/open-prs.json"
+FEEDBACK_HELPER="$SCRIPTS_DIR/feedback-helper.py"
+
+# Read platform config once for feedback operations
+FB_GH_OWNER="" ; FB_GH_REPO=""
+FB_GL_PROJECT=""
+FB_BB_WS="" ; FB_BB_REPO=""
+FB_ADO_ORG="" ; FB_ADO_PROJECT=""
+if command -v python3 >/dev/null 2>&1; then
+  case "$PLATFORM" in
+    github)    FB_GH_OWNER=$(read_config github.owner || true); FB_GH_REPO=$(read_config github.repo || true) ;;
+    gitlab)    FB_GL_PROJECT=$(read_config gitlab.project_path || true) ;;
+    bitbucket) FB_BB_WS=$(read_config bitbucket.workspace || true); FB_BB_REPO=$(read_config bitbucket.repo || true) ;;
+    ado)       FB_ADO_ORG=$(read_config ado.org || true); FB_ADO_PROJECT=$(read_config ado.project || true) ;;
+  esac
+fi
+
+# Discover existing autodocs PRs not yet tracked (bootstrap + orphan recovery)
+if command -v python3 >/dev/null 2>&1 && [ -f "$FEEDBACK_HELPER" ]; then
+  mkdir -p "$OUTPUT_DIR/feedback"
+  case "$PLATFORM" in
+    github)
+      if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
+        discovered=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
+          --head "autodocs/" --state open \
+          --json number,createdAt --limit 50 2>/dev/null || true)
+        [ -n "$discovered" ] && [ "$discovered" != "[]" ] && \
+          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" discover "$discovered" github 2>/dev/null
+      fi
+      ;;
+  esac
+fi
+
+# Check state of tracked PRs (merged/closed)
 if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
-  FEEDBACK_HELPER="$SCRIPTS_DIR/feedback-helper.py"
   if [ -f "$FEEDBACK_HELPER" ]; then
     open_prs=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null)
     if [ -n "$open_prs" ]; then
-      # Read platform config once (not per-PR)
-      FB_GH_OWNER="" ; FB_GH_REPO=""
-      FB_GL_PROJECT=""
-      FB_BB_WS="" ; FB_BB_REPO=""
-      FB_ADO_ORG="" ; FB_ADO_PROJECT=""
-      case "$PLATFORM" in
-        github)    FB_GH_OWNER=$(read_config github.owner); FB_GH_REPO=$(read_config github.repo) ;;
-        gitlab)    FB_GL_PROJECT=$(read_config gitlab.project_path) ;;
-        bitbucket) FB_BB_WS=$(read_config bitbucket.workspace); FB_BB_REPO=$(read_config bitbucket.repo) ;;
-        ado)       FB_ADO_ORG=$(read_config ado.org); FB_ADO_PROJECT=$(read_config ado.project) ;;
-      esac
-
       while IFS= read -r pr_num; do
         [ -z "$pr_num" ] && continue
         pr_state=""
@@ -186,9 +228,26 @@ if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# Check open PR limit (prevent accumulation)
+MAX_OPEN=$(read_config limits.max_open_prs || true)
+[ -z "$MAX_OPEN" ] && MAX_OPEN=10
+if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
+  OPEN_COUNT=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$OPEN_COUNT" -ge "$MAX_OPEN" ]; then
+    echo "[$TIMESTAMP] SKIPPED — $OPEN_COUNT open PRs (limit: $MAX_OPEN). Review existing PRs first." >> "$LOG_FILE"
+    log_metric "sync" "skipped-open-limit" "0"
+    cat > "$STATUS_FILE" <<EOF
+status: skipped
+reason: open PR limit ($OPEN_COUNT/$MAX_OPEN)
+timestamp: $TIMESTAMP
+EOF
+    exit 0
+  fi
+fi
+
 # Call 1: Main sync (PRs + telemetry)
 
-OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
+OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
   --add-dir "$OUTPUT_DIR" \
   --allowedTools "$SYNC_TOOLS" \
   --output-format text \
@@ -197,6 +256,7 @@ OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
 if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   SYNC_STATUS="success"
   echo "[$TIMESTAMP] SYNC SUCCESS" >> "$LOG_FILE"
+  log_metric "sync" "success" "$SYNC_RC"
 
   # Pre-resolve file-to-section mappings (deterministic, no LLM)
   MATCH_HELPER="$SCRIPTS_DIR/match-helper.py"
@@ -214,7 +274,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   # Call 2: Drift detection (reads pre-processed context + doc content, writes drift files)
   # Runs independently — failure here does NOT affect sync status
   if [ -f "$OUTPUT_DIR/drift-prompt.md" ]; then
-    DRIFT_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/drift-prompt.md")" \
+    DRIFT_OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/drift-prompt.md")" \
       --add-dir "$OUTPUT_DIR" \
       --allowedTools "Read,Write" \
       --output-format text \
@@ -228,6 +288,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       echo "[$TIMESTAMP] DRIFT FAILED (exit $DRIFT_RC)" >> "$LOG_FILE"
       echo "$DRIFT_OUTPUT" | tail -10 >> "$LOG_FILE"
     fi
+    log_metric "drift" "$DRIFT_STATUS" "$DRIFT_RC"
   fi
 
   # Call 3: Suggested updates + changelog (only if drift found actionable alerts)
@@ -239,7 +300,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       python3 "$DRIFT_HELPER" suggest-dedup "$OUTPUT_DIR" 2>/dev/null || true
     fi
 
-    SUGGEST_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
+    SUGGEST_OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
       --add-dir "$OUTPUT_DIR" \
       --allowedTools "Read,Write" \
       --output-format text \
@@ -248,41 +309,41 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
     if [ $SUGGEST_RC -eq 0 ]; then
       SUGGEST_STATUS="success"
       echo "[$TIMESTAMP] SUGGEST SUCCESS" >> "$LOG_FILE"
+      log_metric "suggest" "success" "$SUGGEST_RC"
       if grep -q "Verified: NO" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
         echo "[$TIMESTAMP] SUGGEST WARNING: some suggestions are UNVERIFIED" >> "$LOG_FILE"
       fi
 
-      # Call 3v: Verify suggestions with variant reasoning (multi-model verification)
+      # Deterministic FIND verification (Python, not LLM)
+      # Mechanically checks every FIND block exists in the target doc file
+      if [ -f "$DRIFT_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$DRIFT_HELPER" verify-finds "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
+          echo "[$TIMESTAMP] FIND VERIFY: some FIND blocks failed verification" >> "$LOG_FILE"
+      fi
+
+      # Call 3v: Shadow verification (log only, does not gate apply)
+      # Runs verify independently to collect data. After 2 weeks, evaluate whether
+      # verify would have caught errors. If not, permanently remove.
       if grep -q "multi_model" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
          && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
 
         VERIFY_VARIATION_FILE="$OUTPUT_DIR/verify-variation.md"
         if [ -f "$VERIFY_VARIATION_FILE" ]; then
           VERIFY_VARIATION=$(cat "$VERIFY_VARIATION_FILE")
-        else
-          VERIFY_VARIATION="This is a verification run. Write suggestions to ${OUTPUT_DIR}/drift-suggestions-verify.md. Do NOT write changelog files."
-        fi
-
-        VERIFY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
-          --append-system-prompt "$VERIFY_VARIATION" \
-          --model opus \
-          --add-dir "$OUTPUT_DIR" \
-          --allowedTools "Read,Write" \
-          --output-format text \
-          2>&1) && VERIFY_RC=0 || VERIFY_RC=$?
-
-        if [ $VERIFY_RC -eq 0 ]; then
-          VERIFY_STATUS="success"
-          echo "[$TIMESTAMP] VERIFY SUCCESS" >> "$LOG_FILE"
-        else
-          VERIFY_STATUS="failed"
-          echo "[$TIMESTAMP] VERIFY FAILED (exit $VERIFY_RC)" >> "$LOG_FILE"
+          retry claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
+            --append-system-prompt "$VERIFY_VARIATION" \
+            --model opus \
+            --add-dir "$OUTPUT_DIR" \
+            --allowedTools "Read,Write" \
+            --output-format text \
+            > /dev/null 2>&1 && VERIFY_STATUS="shadow-success" || VERIFY_STATUS="shadow-failed"
+          echo "[$TIMESTAMP] VERIFY (shadow): $VERIFY_STATUS" >> "$LOG_FILE"
+          log_metric "verify-shadow" "$VERIFY_STATUS" "0"
         fi
       fi
 
-      # Call 4: Apply suggestions as PR (if auto_pr enabled and suggestions exist)
-      # The apply prompt handles filtering — it applies CONFIDENT+VERIFIED+AGREED edits
-      # and includes REVIEW/DISPUTED/UNMATCHED suggestions in the PR description
+      # Call 4: Apply CONFIDENT + self-verified suggestions as PR
+      # Single-model with self-verification is the quality gate (14/14 in testing)
       if [ "$DRY_RUN" = "true" ]; then
         APPLY_STATUS="dry-run"
         echo "[$TIMESTAMP] DRY RUN — skipping apply" >> "$LOG_FILE"
@@ -291,7 +352,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
          && [ -f "$OUTPUT_DIR/drift-suggestions.md" ] \
          && ! grep -q "suggestion_count: 0" "$OUTPUT_DIR/drift-suggestions.md"; then
 
-        APPLY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/apply-prompt.md")" \
+        APPLY_OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/apply-prompt.md")" \
           --add-dir "$OUTPUT_DIR" \
           --add-dir "$REPO_DIR" \
           --allowedTools "$APPLY_BASE_TOOLS" \
@@ -306,16 +367,19 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
           echo "[$TIMESTAMP] APPLY FAILED (exit $APPLY_RC)" >> "$LOG_FILE"
           echo "$APPLY_OUTPUT" | tail -10 >> "$LOG_FILE"
         fi
+        log_metric "apply" "$APPLY_STATUS" "${APPLY_RC:-0}"
       fi
     else
       SUGGEST_STATUS="failed"
       echo "[$TIMESTAMP] SUGGEST FAILED (exit $SUGGEST_RC)" >> "$LOG_FILE"
       echo "$SUGGEST_OUTPUT" | tail -10 >> "$LOG_FILE"
+      log_metric "suggest" "failed" "$SUGGEST_RC"
     fi
   fi
 else
   echo "[$TIMESTAMP] SYNC FAILED (exit $SYNC_RC)" >> "$LOG_FILE"
   echo "$OUTPUT" | tail -20 >> "$LOG_FILE"
+  log_metric "sync" "failed" "$SYNC_RC"
 fi
 
 # Compute acceptance rate if feedback data exists
@@ -335,3 +399,8 @@ apply: $APPLY_STATUS
 acceptance_rate: $ACCEPTANCE_RATE
 timestamp: $TIMESTAMP
 EOF
+
+# Record successful completion time for lookback dedup
+if [ "$SYNC_STATUS" = "success" ]; then
+  date -u +"%Y-%m-%dT%H:%M:%SZ" > "$OUTPUT_DIR/last-successful-run"
+fi

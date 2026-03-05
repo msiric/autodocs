@@ -321,6 +321,40 @@ cmd_analyze() {
   echo "Run 'setup.sh' to generate a config based on this analysis."
 }
 
+cmd_status() {
+  local config_file
+  config_file=$(find_config) || exit 1
+  local output_dir
+  output_dir=$(dirname "$config_file")
+
+  echo "=== autodocs status ==="
+  echo ""
+  if [ -f "$output_dir/sync-status.md" ]; then
+    cat "$output_dir/sync-status.md"
+  else
+    echo "No runs recorded."
+  fi
+  echo ""
+  if [ -f "$output_dir/last-successful-run" ]; then
+    echo "Last successful run: $(cat "$output_dir/last-successful-run")"
+  fi
+  if [ -f "$output_dir/feedback/open-prs.json" ]; then
+    local open
+    open=$(python3 "$HELPER" "$output_dir/feedback/open-prs.json" list-prs --open-only 2>/dev/null | wc -l | tr -d ' ')
+    echo "Open autodocs PRs: $open"
+  fi
+  if [ -f "$output_dir/feedback/open-prs.json" ]; then
+    local rate
+    rate=$(python3 "$HELPER" "$output_dir/feedback/open-prs.json" acceptance-rate 2>/dev/null)
+    echo "Acceptance rate: $rate"
+  fi
+  if [ -f "$output_dir/metrics.jsonl" ]; then
+    local total
+    total=$(wc -l < "$output_dir/metrics.jsonl" | tr -d ' ')
+    echo "Metric entries: $total"
+  fi
+}
+
 # --- Subcommand routing ---
 case "${1:-}" in
   team)   shift; cmd_team "$@"; exit 0 ;;
@@ -328,10 +362,11 @@ case "${1:-}" in
   paths)  shift; cmd_paths "$@"; exit 0 ;;
   config) shift; cmd_config "$@"; exit 0 ;;
   analyze) shift; cmd_analyze "$@"; exit 0 ;;
+  status) shift; cmd_status "$@"; exit 0 ;;
   --quick) QUICK_MODE=true ;;
   "")     ;; # no args = full setup
   -*)     ;; # other flags
-  *)      echo "Usage: setup.sh [--quick] | team | docs | paths | config | analyze"; exit 1 ;;
+  *)      echo "Usage: setup.sh [--quick] | team | docs | paths | config | analyze | status"; exit 1 ;;
 esac
 
 QUICK_MODE=${QUICK_MODE:-false}

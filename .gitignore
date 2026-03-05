@@ -22,6 +22,10 @@
 **/feedback/outcomes.json
 **/feedback/accuracy.json
 **/resolved-mappings.md
+**/last-successful-run
+**/metrics.jsonl
+**/drift-context.json
+**/suggest-context.json
 !templates/*.md
 !config.example.yaml
 !examples/**/config.yaml

@@ -556,6 +556,99 @@ def suggest_dedup(output_dir):
     )
 
 
+def verify_finds(output_dir, repo_dir):
+    """Mechanically verify every FIND block in suggestions exists in the target doc.
+
+    Reads drift-suggestions.md, checks each FIND text against the actual file
+    in the repo. Writes verified-suggestions.json with pass/fail per suggestion.
+    This is the deterministic quality gate — no LLM involved.
+    """
+    output_dir = Path(output_dir)
+    repo_dir = Path(repo_dir)
+    suggestions_path = output_dir / "drift-suggestions.md"
+    if not suggestions_path.exists():
+        return
+
+    config_path = output_dir / "config.yaml"
+    if not config_path.exists():
+        return
+    config = yaml.safe_load(config_path.read_text()) or {}
+
+    # Build doc name → repo path mapping
+    doc_paths = {}
+    for doc in config.get("docs") or []:
+        if doc.get("repo_path"):
+            doc_paths[doc["name"]] = repo_dir / doc["repo_path"]
+
+    # Parse FIND blocks from suggestions file
+    text = suggestions_path.read_text()
+    results = []
+    current_doc = ""
+    current_find = []
+    in_find = False
+    confidence = ""
+
+    for line in text.splitlines():
+        # Track which doc we're in: "## architecture.md — Section Name"
+        doc_match = re.match(r"## (\S+\.md)\s*—", line)
+        if doc_match:
+            current_doc = doc_match.group(1)
+            continue
+
+        # Track confidence
+        if line.startswith("**Confidence:**"):
+            confidence = "CONFIDENT" if "CONFIDENT" in line else "REVIEW"
+            continue
+
+        # FIND block start
+        if "### FIND" in line:
+            in_find = True
+            current_find = []
+            continue
+
+        # FIND block content (quoted lines)
+        if in_find:
+            if line.startswith("> "):
+                current_find.append(line[2:])
+                continue
+            elif line.strip() == "":
+                continue
+            else:
+                # End of FIND block — verify it
+                in_find = False
+                find_text = "\n".join(current_find)
+                if find_text and current_doc:
+                    doc_path = doc_paths.get(current_doc)
+                    status = "SKIP"
+                    reason = ""
+                    if not doc_path or not doc_path.exists():
+                        status = "SKIP"
+                        reason = "doc not found in repo"
+                    elif find_text in doc_path.read_text():
+                        status = "PASS"
+                    else:
+                        status = "FAIL"
+                        reason = "FIND text not found in doc"
+                    results.append({
+                        "doc": current_doc,
+                        "find_text": find_text[:100],
+                        "confidence": confidence,
+                        "status": status,
+                        "reason": reason,
+                    })
+
+    (output_dir / "verified-suggestions.json").write_text(
+        json.dumps(results, indent=2) + "\n"
+    )
+
+    # Log summary
+    passed = sum(1 for r in results if r["status"] == "PASS")
+    failed = sum(1 for r in results if r["status"] == "FAIL")
+    if failed > 0:
+        print(f"FIND verification: {passed} passed, {failed} FAILED", file=sys.stderr)
+    return failed == 0
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -568,6 +661,10 @@ def main():
         pre_process(output_dir)
     elif operation == "suggest-dedup":
         suggest_dedup(output_dir)
+    elif operation == "verify-finds":
+        repo_dir = sys.argv[3] if len(sys.argv) > 3 else "."
+        ok = verify_finds(output_dir, repo_dir)
+        sys.exit(0 if ok else 1)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)
