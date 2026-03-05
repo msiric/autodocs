@@ -74,3 +74,65 @@ EOF
   grep -q "relevant_paths:" "$TEST_DIR/config.yaml"
   grep -q "  - src/" "$TEST_DIR/config.yaml"
 }
+
+# ============================================================
+# read_config function (mirrors sync.sh's read_config)
+# ============================================================
+
+# Define read_config for testing — same logic as sync.sh
+_read_config() {
+  local config_path="$1"
+  local key="$2"
+  python3 -c "
+import yaml
+c = yaml.safe_load(open('$config_path'))
+keys = '$key'.split('.')
+v = c
+for k in keys:
+    v = v.get(k, '') if isinstance(v, dict) else ''
+print('true' if v is True else 'false' if v is False else v)
+" 2>/dev/null
+}
+
+@test "read_config returns simple top-level value" {
+  create_config "github"
+  result=$(_read_config "$TEST_DIR/config.yaml" "platform")
+  [ "$result" = "github" ]
+}
+
+@test "read_config returns dotted nested value" {
+  create_config "github"
+  result=$(_read_config "$TEST_DIR/config.yaml" "github.owner")
+  [ "$result" = "testuser" ]
+}
+
+@test "read_config returns true for boolean true" {
+  create_config
+  cat >> "$TEST_DIR/config.yaml" <<EOF
+telemetry:
+  enabled: true
+EOF
+  result=$(_read_config "$TEST_DIR/config.yaml" "telemetry.enabled")
+  [ "$result" = "true" ]
+}
+
+@test "read_config returns false for boolean false" {
+  create_config
+  cat >> "$TEST_DIR/config.yaml" <<EOF
+telemetry:
+  enabled: false
+EOF
+  result=$(_read_config "$TEST_DIR/config.yaml" "telemetry.enabled")
+  [ "$result" = "false" ]
+}
+
+@test "read_config returns empty for missing key" {
+  create_config
+  result=$(_read_config "$TEST_DIR/config.yaml" "nonexistent.key")
+  [ -z "$result" ]
+}
+
+@test "read_config returns empty for missing config file" {
+  result=$(_read_config "$TEST_DIR/nonexistent.yaml" "platform" || true)
+  [ -z "$result" ]
+}
