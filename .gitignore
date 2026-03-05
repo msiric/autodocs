@@ -21,6 +21,7 @@
 **/feedback/open-prs.json
 **/feedback/outcomes.json
 **/feedback/accuracy.json
+**/resolved-mappings.md
 !templates/*.md
 !config.example.yaml
 !examples/**/config.yaml

@@ -125,6 +125,14 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   SYNC_STATUS="success"
   echo "[$TIMESTAMP] SYNC SUCCESS" >> "$LOG_FILE"
 
+  # Pre-resolve file-to-section mappings (deterministic, no LLM)
+  MATCH_HELPER="$(dirname "$0")/../scripts/match-helper.py"
+  [ ! -f "$MATCH_HELPER" ] && MATCH_HELPER="$(cd "$(dirname "$0")" && pwd)/../../autodocs/scripts/match-helper.py"
+  if [ -f "${MATCH_HELPER:-/dev/null}" ] && command -v python3 >/dev/null 2>&1; then
+    python3 "$MATCH_HELPER" "$OUTPUT_DIR/config.yaml" --resolve-report "$OUTPUT_DIR/daily-report.md" \
+      > "$OUTPUT_DIR/resolved-mappings.md" 2>/dev/null || true
+  fi
+
   # Call 2: Drift detection (reads sync output + doc indexes, writes drift files)
   # Runs independently — failure here does NOT affect sync status
   if [ -f "$OUTPUT_DIR/drift-prompt.md" ]; then

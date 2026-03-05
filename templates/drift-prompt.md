@@ -75,6 +75,10 @@ Create ONE **LOW** confidence alert: "Large refactoring PR (N files) — manual 
 
 ### Case B: File paths available (YES/MAYBE with Files)
 
+**Pre-resolved mappings:** If `${OUTPUT_DIR}/resolved-mappings.md` exists, read it. This file contains deterministic file-to-section mappings (one per line: `M src/auth/handler.ts → Authentication`). Use these mappings directly instead of performing your own pattern matching. This is more reliable than prompt-based matching.
+
+If resolved-mappings.md does not exist, fall back to the matching rules below.
+
 If the PR has a `Files:` list, use the individual file paths and change types to detect drift.
 
 For each file path, find its matching `package_map` key using these rules (try in order, first match wins):

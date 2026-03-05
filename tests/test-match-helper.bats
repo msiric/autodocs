@@ -187,3 +187,50 @@ EOF
   result=$(python3 "$HELPER" "$TEST_DIR/config.yaml" "src/api.ts")
   [ "$result" = "UNMAPPED" ]
 }
+
+# ============================================================
+# Resolve report mode (--resolve-report)
+# ============================================================
+
+@test "resolve-report extracts and resolves files from daily report" {
+  cat > "$TEST_DIR/report.md" <<EOF
+## Team PRs (last 24h)
+- PR #1: "Fix auth" by Alice — merged
+  Description: Fixed auth bug
+  API: YES (src/auth/)
+  Files:
+    M src/auth/handler.ts
+    A src/auth/permissions.ts
+    D src/legacy/old-auth.ts
+EOF
+  python3 "$HELPER" "$TEST_DIR/config.yaml" --resolve-report "$TEST_DIR/report.md" > "$TEST_DIR/mappings.md"
+  grep -q "src/auth/handler.ts → Authentication" "$TEST_DIR/mappings.md"
+  grep -q "src/auth/permissions.ts → Authentication" "$TEST_DIR/mappings.md"
+}
+
+@test "resolve-report handles renamed files" {
+  cat > "$TEST_DIR/report.md" <<EOF
+  Files:
+    R src/old.ts → src/auth/new.ts
+EOF
+  python3 "$HELPER" "$TEST_DIR/config.yaml" --resolve-report "$TEST_DIR/report.md" > "$TEST_DIR/mappings.md"
+  grep -q "src/auth/new.ts → Authentication" "$TEST_DIR/mappings.md"
+}
+
+@test "resolve-report marks unmapped files" {
+  cat > "$TEST_DIR/report.md" <<EOF
+  Files:
+    M totally/unknown/file.ts
+EOF
+  python3 "$HELPER" "$TEST_DIR/config.yaml" --resolve-report "$TEST_DIR/report.md" > "$TEST_DIR/mappings.md"
+  grep -q "totally/unknown/file.ts → UNMAPPED" "$TEST_DIR/mappings.md"
+}
+
+@test "resolve-report handles empty report" {
+  cat > "$TEST_DIR/report.md" <<EOF
+## Team PRs (last 24h)
+No PRs merged in the lookback window.
+EOF
+  python3 "$HELPER" "$TEST_DIR/config.yaml" --resolve-report "$TEST_DIR/report.md" > "$TEST_DIR/mappings.md"
+  [ ! -s "$TEST_DIR/mappings.md" ] || [ "$(wc -l < "$TEST_DIR/mappings.md")" -eq 0 ]
+}

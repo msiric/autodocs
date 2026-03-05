@@ -113,12 +113,54 @@ def match_file_with_roots(original_path, stripped_path, package_map, pr_title=""
     return "UNMAPPED"
 
 
+def extract_files_from_report(report_path):
+    """Extract file paths and change types from a daily-report.md file."""
+    files = []
+    with open(report_path) as f:
+        for line in f:
+            line = line.strip()
+            # Match lines like: M src/auth/handler.ts
+            if line and line[0] in "MADR" and len(line) > 2 and line[1] == " ":
+                change_type = line[0]
+                file_path = line[2:].strip()
+                files.append((change_type, file_path))
+            # Match renamed files: R src/old.ts → src/new.ts
+            elif line.startswith("R ") and "→" in line:
+                parts = line[2:].split("→")
+                if len(parts) == 2:
+                    new_path = parts[1].strip()
+                    files.append(("R", new_path))
+    return files
+
+
+def resolve_report(config_path, report_path):
+    """Resolve all files in a daily report to their doc sections."""
+    config = load_config(config_path)
+    source_roots = config.get("source_roots", [])
+    package_map = get_all_package_maps(config)
+
+    files = extract_files_from_report(report_path)
+    for change_type, file_path in files:
+        stripped = strip_source_root(file_path, source_roots)
+        section = match_file_with_roots(file_path, stripped, package_map)
+        print(f"{change_type} {file_path} → {section}")
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
 
     config_path = Path(sys.argv[1])
+
+    # Mode: resolve report
+    if sys.argv[2] == "--resolve-report":
+        report_path = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+        if report_path and report_path.exists():
+            resolve_report(config_path, report_path)
+        sys.exit(0)
+
+    # Mode: single file match
     file_path = sys.argv[2]
     pr_title = sys.argv[3] if len(sys.argv) > 3 else ""
 
@@ -126,10 +168,7 @@ def main():
     source_roots = config.get("source_roots", [])
     package_map = get_all_package_maps(config)
 
-    # Strip source root prefix (used for directory/basename matching)
     stripped_path = strip_source_root(file_path, source_roots)
-
-    # Match: try original path for exact/glob, stripped path for directory/basename
     result = match_file_with_roots(file_path, stripped_path, package_map, pr_title)
     print(result)
 
