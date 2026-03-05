@@ -82,6 +82,18 @@ in any documentation. Consider adding them to the doc's file index.
 
 (or "No undocumented files found." if none)
 
+## Suggested Config Updates
+
+If any undocumented files are in directories not covered by the current
+`package_map` in config, suggest additions as copy-pasteable YAML:
+
+```yaml
+# Suggested addition to config.yaml docs[0].package_map:
+new-package: "New Section Name"
+```
+
+If no new directories need mapping, write: "No config updates needed."
+
 ## Summary
 
 - Files checked: X
