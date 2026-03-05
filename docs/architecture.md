@@ -2,7 +2,7 @@
 
 ## Overview
 
-autodocs runs as three sequential Claude Code headless calls daily, plus a weekly structural scan. Each call is independent — downstream failures can't corrupt upstream output.
+autodocs runs as up to five sequential Claude Code headless calls daily (sync, drift, suggest, verify, apply), plus a weekly structural scan. Each call is independent — downstream failures can't corrupt upstream output.
 
 ```
 launchd/cron (daily)

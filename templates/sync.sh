@@ -3,6 +3,10 @@ set -euo pipefail
 
 # autodocs — automated documentation drift detection
 # https://github.com/msiric/autodocs
+# Usage: autodocs-sync.sh [--dry-run]
+
+DRY_RUN=false
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
 
 OUTPUT_DIR="${OUTPUT_DIR}"
 REPO_DIR="${REPO_DIR}"
@@ -10,8 +14,28 @@ STATUS_FILE="$OUTPUT_DIR/sync-status.md"
 LOG_FILE="$OUTPUT_DIR/sync.log"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Resolve helper scripts directory
+# Deployed: scripts/ is sibling to this script (copied by setup.sh)
+# Development: scripts/ is sibling to templates/ (one level up)
+SCRIPTS_DIR="$(dirname "$0")/scripts"
+[ ! -d "$SCRIPTS_DIR" ] && SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)/../scripts"
+
+# Read a dotted config key (e.g., "github.owner") from config.yaml
+# Normalizes booleans to lowercase "true"/"false"
+read_config() {
+  python3 -c "
+import yaml
+c = yaml.safe_load(open('$OUTPUT_DIR/config.yaml'))
+keys = '$1'.split('.')
+v = c
+for k in keys:
+    v = v.get(k, '') if isinstance(v, dict) else ''
+print('true' if v is True else 'false' if v is False else v)
+" 2>/dev/null
+}
+
 # Ensure PATH includes typical Claude Code install locations (launchd has minimal PATH)
-export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.claude/local:$PATH"
+export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.claude/local"
 
 # Prevent concurrent runs (mkdir is atomic on all filesystems)
 LOCK_DIR="$OUTPUT_DIR/.sync.lock"
@@ -62,43 +86,92 @@ case "$PLATFORM" in
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(gh:*),Bash(git:*)"
     ;;
   gitlab)
-    SYNC_TOOLS="Bash(glab:*),Bash(git:*),mcp__kusto-mcp__kusto_query,Write"
+    SYNC_TOOLS="Bash(glab:*),Bash(git:*),Write"
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(glab:*),Bash(git:*)"
     ;;
   bitbucket)
-    SYNC_TOOLS="Bash(curl:*),Bash(git:*),mcp__kusto-mcp__kusto_query,Write"
+    SYNC_TOOLS="Bash(curl:*),Bash(git:*),Write"
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(curl:*),Bash(git:*)"
     ;;
-  *)  # ado (default)
+  ado)
     SYNC_TOOLS="mcp__azure-devops__repo_list_pull_requests_by_repo_or_project"
     SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_get_pull_request_by_id"
     SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__repo_list_pull_request_threads"
     SYNC_TOOLS="$SYNC_TOOLS,mcp__azure-devops__search_code"
-    SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
     SYNC_TOOLS="$SYNC_TOOLS,Bash(git:*),Write"
     APPLY_BASE_TOOLS="Read,Edit,Write,Bash(git:*)"
     APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_pull_request"
     APPLY_BASE_TOOLS="$APPLY_BASE_TOOLS,mcp__azure-devops__repo_create_branch"
     ;;
+  *)
+    echo "[$TIMESTAMP] ERROR: unknown platform '$PLATFORM'" >> "$LOG_FILE"
+    exit 1
+    ;;
 esac
+
+# Add Kusto telemetry tool if enabled (platform-independent)
+if [ "$(read_config telemetry.enabled)" = "true" ]; then
+  SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
+fi
 
 # Feedback: check state of pending autodocs PRs (bash only, no LLM call)
 FEEDBACK_FILE="$OUTPUT_DIR/feedback/open-prs.json"
 if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
-  FEEDBACK_HELPER="$(dirname "$0")/../scripts/feedback-helper.py"
-  [ ! -f "$FEEDBACK_HELPER" ] && FEEDBACK_HELPER="$(cd "$(dirname "$0")" && pwd)/../../autodocs/scripts/feedback-helper.py"
+  FEEDBACK_HELPER="$SCRIPTS_DIR/feedback-helper.py"
   if [ -f "$FEEDBACK_HELPER" ]; then
     open_prs=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null)
     if [ -n "$open_prs" ]; then
+      # Read platform config once (not per-PR)
+      FB_GH_OWNER="" ; FB_GH_REPO=""
+      FB_GL_PROJECT=""
+      FB_BB_WS="" ; FB_BB_REPO=""
+      FB_ADO_ORG="" ; FB_ADO_PROJECT=""
+      case "$PLATFORM" in
+        github)    FB_GH_OWNER=$(read_config github.owner); FB_GH_REPO=$(read_config github.repo) ;;
+        gitlab)    FB_GL_PROJECT=$(read_config gitlab.project_path) ;;
+        bitbucket) FB_BB_WS=$(read_config bitbucket.workspace); FB_BB_REPO=$(read_config bitbucket.repo) ;;
+        ado)       FB_ADO_ORG=$(read_config ado.org); FB_ADO_PROJECT=$(read_config ado.project) ;;
+      esac
+
       while IFS= read -r pr_num; do
         [ -z "$pr_num" ] && continue
         pr_state=""
         case "$PLATFORM" in
           github)
-            GH_OWNER=$(python3 -c "import yaml;c=yaml.safe_load(open('$OUTPUT_DIR/config.yaml'));print(c.get('github',{}).get('owner',''))" 2>/dev/null)
-            GH_REPO=$(python3 -c "import yaml;c=yaml.safe_load(open('$OUTPUT_DIR/config.yaml'));print(c.get('github',{}).get('repo',''))" 2>/dev/null)
-            [ -n "$GH_OWNER" ] && [ -n "$GH_REPO" ] && \
-              pr_state=$(gh pr view "$pr_num" -R "$GH_OWNER/$GH_REPO" --json state --jq '.state' 2>/dev/null)
+            [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ] && \
+              pr_state=$(gh pr view "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" --json state --jq '.state' 2>/dev/null)
+            ;;
+          gitlab)
+            if [ -n "$FB_GL_PROJECT" ] && command -v glab >/dev/null 2>&1; then
+              gl_raw=$(glab mr view "$pr_num" -R "$FB_GL_PROJECT" -F json 2>/dev/null \
+                | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+              case "$gl_raw" in
+                merged) pr_state="MERGED" ;;
+                closed) pr_state="CLOSED" ;;
+              esac
+            fi
+            ;;
+          bitbucket)
+            if [ -n "$FB_BB_WS" ] && [ -n "$FB_BB_REPO" ] && [ -n "${BITBUCKET_TOKEN:-}" ]; then
+              bb_raw=$(curl -s -H "Authorization: Bearer $BITBUCKET_TOKEN" \
+                "https://api.bitbucket.org/2.0/repositories/$FB_BB_WS/$FB_BB_REPO/pullrequests/$pr_num" \
+                | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+              case "$bb_raw" in
+                MERGED) pr_state="MERGED" ;;
+                DECLINED|SUPERSEDED) pr_state="CLOSED" ;;
+              esac
+            fi
+            ;;
+          ado)
+            if [ -n "$FB_ADO_ORG" ] && [ -n "$FB_ADO_PROJECT" ] && command -v az >/dev/null 2>&1; then
+              ado_raw=$(az repos pr show --id "$pr_num" \
+                --org "https://dev.azure.com/$FB_ADO_ORG" -p "$FB_ADO_PROJECT" \
+                --query "status" -o tsv 2>/dev/null)
+              case "$ado_raw" in
+                completed) pr_state="MERGED" ;;
+                abandoned) pr_state="CLOSED" ;;
+              esac
+            fi
             ;;
         esac
         if [ "$pr_state" = "MERGED" ]; then
@@ -126,14 +199,19 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   echo "[$TIMESTAMP] SYNC SUCCESS" >> "$LOG_FILE"
 
   # Pre-resolve file-to-section mappings (deterministic, no LLM)
-  MATCH_HELPER="$(dirname "$0")/../scripts/match-helper.py"
-  [ ! -f "$MATCH_HELPER" ] && MATCH_HELPER="$(cd "$(dirname "$0")" && pwd)/../../autodocs/scripts/match-helper.py"
-  if [ -f "${MATCH_HELPER:-/dev/null}" ] && command -v python3 >/dev/null 2>&1; then
+  MATCH_HELPER="$SCRIPTS_DIR/match-helper.py"
+  if [ -f "$MATCH_HELPER" ] && command -v python3 >/dev/null 2>&1; then
     python3 "$MATCH_HELPER" "$OUTPUT_DIR/config.yaml" --resolve-report "$OUTPUT_DIR/daily-report.md" \
       > "$OUTPUT_DIR/resolved-mappings.md" 2>/dev/null || true
   fi
 
-  # Call 2: Drift detection (reads sync output + doc indexes, writes drift files)
+  # Pre-process drift detection (deterministic: parse, group, dedup, lifecycle)
+  DRIFT_HELPER="$SCRIPTS_DIR/drift-helper.py"
+  if [ -f "$DRIFT_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+    python3 "$DRIFT_HELPER" pre-process "$OUTPUT_DIR" 2>/dev/null || true
+  fi
+
+  # Call 2: Drift detection (reads pre-processed context + doc content, writes drift files)
   # Runs independently — failure here does NOT affect sync status
   if [ -f "$OUTPUT_DIR/drift-prompt.md" ]; then
     DRIFT_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/drift-prompt.md")" \
@@ -155,6 +233,12 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
   # Call 3: Suggested updates + changelog (only if drift found actionable alerts)
   if [ "$DRIFT_STATUS" = "success" ] && [ -f "$OUTPUT_DIR/suggest-prompt.md" ] \
      && grep -qE "HIGH|CRITICAL" "$OUTPUT_DIR/drift-report.md" 2>/dev/null; then
+
+    # Pre-compute suggest dedup (deterministic: changelog + open PR filtering)
+    if [ -f "$DRIFT_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+      python3 "$DRIFT_HELPER" suggest-dedup "$OUTPUT_DIR" 2>/dev/null || true
+    fi
+
     SUGGEST_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
       --add-dir "$OUTPUT_DIR" \
       --allowedTools "Read,Write" \
@@ -172,7 +256,12 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       if grep -q "multi_model" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
          && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
 
-        VERIFY_VARIATION="IMPORTANT: This is a verification run. 1. Write all suggestions to ${OUTPUT_DIR}/drift-suggestions-verify.md instead of drift-suggestions.md. 2. Do NOT write any changelog files — only write the suggestions file. 3. Before generating each suggestion, re-read the full doc section and list the 3 most important facts that the PR changes might affect. Then generate the FIND/REPLACE suggestion based on those facts."
+        VERIFY_VARIATION_FILE="$OUTPUT_DIR/verify-variation.md"
+        if [ -f "$VERIFY_VARIATION_FILE" ]; then
+          VERIFY_VARIATION=$(cat "$VERIFY_VARIATION_FILE")
+        else
+          VERIFY_VARIATION="This is a verification run. Write suggestions to ${OUTPUT_DIR}/drift-suggestions-verify.md. Do NOT write changelog files."
+        fi
 
         VERIFY_OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
           --append-system-prompt "$VERIFY_VARIATION" \
@@ -194,7 +283,10 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       # Call 4: Apply suggestions as PR (if auto_pr enabled and suggestions exist)
       # The apply prompt handles filtering — it applies CONFIDENT+VERIFIED+AGREED edits
       # and includes REVIEW/DISPUTED/UNMATCHED suggestions in the PR description
-      if [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
+      if [ "$DRY_RUN" = "true" ]; then
+        APPLY_STATUS="dry-run"
+        echo "[$TIMESTAMP] DRY RUN — skipping apply" >> "$LOG_FILE"
+      elif [ -f "$OUTPUT_DIR/apply-prompt.md" ] \
          && grep -q "auto_pr" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
          && [ -f "$OUTPUT_DIR/drift-suggestions.md" ] \
          && ! grep -q "suggestion_count: 0" "$OUTPUT_DIR/drift-suggestions.md"; then
@@ -228,7 +320,8 @@ fi
 
 # Compute acceptance rate if feedback data exists
 ACCEPTANCE_RATE="n/a"
-if [ -f "$FEEDBACK_FILE" ] && [ -f "${FEEDBACK_HELPER:-/dev/null}" ] && command -v python3 >/dev/null 2>&1; then
+FEEDBACK_HELPER="$SCRIPTS_DIR/feedback-helper.py"
+if [ -f "$FEEDBACK_FILE" ] && [ -f "$FEEDBACK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
   ACCEPTANCE_RATE=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" acceptance-rate 2>/dev/null || echo "n/a")
 fi
 

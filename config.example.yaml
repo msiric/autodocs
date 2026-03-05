@@ -7,7 +7,7 @@
 # Only re-run setup.sh if you change OUTPUT_DIR or REPO_DIR (paths baked into prompts).
 
 # ---------------------------------------------------------------------------
-# Platform: "github" or "ado"
+# Platform: "github", "ado", "gitlab", or "bitbucket"
 # ---------------------------------------------------------------------------
 platform: github
 

@@ -714,6 +714,7 @@ envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/drift-prompt.md" > "$OUTPUT_DIR/drift
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/suggest-prompt.md" > "$OUTPUT_DIR/suggest-prompt.md"
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/apply-prompt.md" > "$OUTPUT_DIR/apply-prompt.md"
 envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/structural-scan-prompt.md" > "$OUTPUT_DIR/structural-scan-prompt.md"
+envsubst '${OUTPUT_DIR}' < "$TEMPLATES_DIR/verify-variation.md" > "$OUTPUT_DIR/verify-variation.md"
 
 echo "Rendering scripts..."
 envsubst '${OUTPUT_DIR} ${REPO_DIR}' < "$TEMPLATES_DIR/sync.sh" > "$OUTPUT_DIR/autodocs-sync.sh"
@@ -721,9 +722,13 @@ chmod +x "$OUTPUT_DIR/autodocs-sync.sh"
 envsubst '${OUTPUT_DIR} ${REPO_DIR}' < "$TEMPLATES_DIR/structural-scan.sh" > "$OUTPUT_DIR/autodocs-structural-scan.sh"
 chmod +x "$OUTPUT_DIR/autodocs-structural-scan.sh"
 
+echo "Copying helper scripts..."
+mkdir -p "$OUTPUT_DIR/scripts"
+cp "$SCRIPT_DIR/scripts/"*.py "$OUTPUT_DIR/scripts/"
+
 cat > "$OUTPUT_DIR/autodocs-now" <<EOF
 #!/bin/bash
-exec "$OUTPUT_DIR/autodocs-sync.sh"
+exec "$OUTPUT_DIR/autodocs-sync.sh" "\$@"
 EOF
 chmod +x "$OUTPUT_DIR/autodocs-now"
 

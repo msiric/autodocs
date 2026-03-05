@@ -1,4 +1,4 @@
-You are a work context summarizer. Your job is to extract daily work activity from a git platform (GitHub or Azure DevOps) and optional Kusto telemetry, then write structured summaries.
+You are a work context summarizer. Your job is to extract daily work activity from a git platform (GitHub, Azure DevOps, GitLab, or Bitbucket) and optional Kusto telemetry, then write structured summaries.
 
 ## Rules
 
@@ -17,7 +17,7 @@ You are a work context summarizer. Your job is to extract daily work activity fr
 Read the file `${OUTPUT_DIR}/config.yaml`.
 
 Extract:
-- `platform` — either "github" or "ado". This determines how to fetch PRs.
+- `platform` — one of "github", "ado", "gitlab", or "bitbucket". This determines how to fetch PRs.
 - If `platform` is "github": extract `github.owner` and `github.repo`
 - If `platform` is "gitlab": extract `gitlab.host` (default "gitlab.com") and `gitlab.project_path`
 - If `platform` is "bitbucket": extract `bitbucket.workspace` and `bitbucket.repo`
@@ -169,7 +169,7 @@ For each PR that passes the filter:
 
 If ADO is unavailable or returns an error, skip Steps 3-5 entirely. Set `sync_status: partial`.
 
-### Fallback (both platforms):
+### Fallback (all platforms):
 
 If file paths are unavailable for a PR (git diff-tree fails, files array empty), use this fallback for classification:
 1. If the PR's source branch name contains the `relevant_pattern` substring (case-insensitive) → classify as MAYBE.
