@@ -361,24 +361,24 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       fi
 
       # Call 3v: Shadow verification (log only, does not gate apply)
-      # Runs verify independently to collect data. After 2 weeks, evaluate whether
-      # verify would have caught errors. If not, permanently remove.
+      # Runs in a subshell so failures never crash the main pipeline.
       if grep -q "multi_model" "$OUTPUT_DIR/config.yaml" 2>/dev/null \
          && grep -q "CONFIDENT" "$OUTPUT_DIR/drift-suggestions.md" 2>/dev/null; then
-
-        VERIFY_VARIATION_FILE="$OUTPUT_DIR/verify-variation.md"
-        if [ -f "$VERIFY_VARIATION_FILE" ]; then
-          VERIFY_VARIATION=$(cat "$VERIFY_VARIATION_FILE")
-          retry claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
-            --append-system-prompt "$VERIFY_VARIATION" \
-            --model opus \
-            --add-dir "$OUTPUT_DIR" \
-            --allowedTools "Read,Write" \
-            --output-format text \
-            > /dev/null 2>&1 && VERIFY_STATUS="shadow-success" || VERIFY_STATUS="shadow-failed"
-          echo "[$TIMESTAMP] VERIFY (shadow): $VERIFY_STATUS" >> "$LOG_FILE"
-          log_metric "verify-shadow" "$VERIFY_STATUS" "0"
-        fi
+        (
+          VERIFY_VARIATION_FILE="$OUTPUT_DIR/verify-variation.md"
+          if [ -f "$VERIFY_VARIATION_FILE" ]; then
+            VERIFY_VARIATION=$(cat "$VERIFY_VARIATION_FILE")
+            claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
+              --append-system-prompt "$VERIFY_VARIATION" \
+              --model opus \
+              --add-dir "$OUTPUT_DIR" \
+              --allowedTools "Read,Write" \
+              --output-format text \
+              > /dev/null 2>&1 && VERIFY_STATUS="shadow-success" || VERIFY_STATUS="shadow-failed"
+            echo "[$TIMESTAMP] VERIFY (shadow): $VERIFY_STATUS" >> "$LOG_FILE"
+            log_metric "verify-shadow" "$VERIFY_STATUS" "0"
+          fi
+        ) || echo "[$TIMESTAMP] VERIFY (shadow): skipped (call failed)" >> "$LOG_FILE"
       fi
 
       # Call 4: Apply CONFIDENT + self-verified suggestions as PR
