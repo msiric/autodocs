@@ -161,7 +161,7 @@ if command -v python3 >/dev/null 2>&1 && [ -f "$FEEDBACK_HELPER" ]; then
     github)
       if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
         discovered=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
-          --head "autodocs/" --state open \
+          --search "head:autodocs/ is:open" \
           --json number,createdAt --limit 50 2>/dev/null || true)
         [ -n "$discovered" ] && [ "$discovered" != "[]" ] && \
           python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" discover "$discovered" github 2>/dev/null
