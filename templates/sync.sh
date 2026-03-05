@@ -82,6 +82,37 @@ case "$PLATFORM" in
     ;;
 esac
 
+# Feedback: check state of pending autodocs PRs (bash only, no LLM call)
+FEEDBACK_FILE="$OUTPUT_DIR/feedback/open-prs.json"
+if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
+  FEEDBACK_HELPER="$(dirname "$0")/../scripts/feedback-helper.py"
+  [ ! -f "$FEEDBACK_HELPER" ] && FEEDBACK_HELPER="$(cd "$(dirname "$0")" && pwd)/../../autodocs/scripts/feedback-helper.py"
+  if [ -f "$FEEDBACK_HELPER" ]; then
+    open_prs=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null)
+    if [ -n "$open_prs" ]; then
+      while IFS= read -r pr_num; do
+        [ -z "$pr_num" ] && continue
+        pr_state=""
+        case "$PLATFORM" in
+          github)
+            GH_OWNER=$(python3 -c "import yaml;c=yaml.safe_load(open('$OUTPUT_DIR/config.yaml'));print(c.get('github',{}).get('owner',''))" 2>/dev/null)
+            GH_REPO=$(python3 -c "import yaml;c=yaml.safe_load(open('$OUTPUT_DIR/config.yaml'));print(c.get('github',{}).get('repo',''))" 2>/dev/null)
+            [ -n "$GH_OWNER" ] && [ -n "$GH_REPO" ] && \
+              pr_state=$(gh pr view "$pr_num" -R "$GH_OWNER/$GH_REPO" --json state --jq '.state' 2>/dev/null)
+            ;;
+        esac
+        if [ "$pr_state" = "MERGED" ]; then
+          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" update-pr "$pr_num" merged "$(date +%Y-%m-%d)"
+          echo "[$TIMESTAMP] FEEDBACK: PR #$pr_num merged" >> "$LOG_FILE"
+        elif [ "$pr_state" = "CLOSED" ]; then
+          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" update-pr "$pr_num" closed
+          echo "[$TIMESTAMP] FEEDBACK: PR #$pr_num closed" >> "$LOG_FILE"
+        fi
+      done <<< "$open_prs"
+    fi
+  fi
+fi
+
 # Call 1: Main sync (PRs + telemetry)
 
 OUTPUT=$(claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
@@ -187,6 +218,12 @@ else
   echo "$OUTPUT" | tail -20 >> "$LOG_FILE"
 fi
 
+# Compute acceptance rate if feedback data exists
+ACCEPTANCE_RATE="n/a"
+if [ -f "$FEEDBACK_FILE" ] && [ -f "${FEEDBACK_HELPER:-/dev/null}" ] && command -v python3 >/dev/null 2>&1; then
+  ACCEPTANCE_RATE=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" acceptance-rate 2>/dev/null || echo "n/a")
+fi
+
 # Write status ONCE at the end
 cat > "$STATUS_FILE" <<EOF
 status: $SYNC_STATUS
@@ -194,5 +231,6 @@ drift: $DRIFT_STATUS
 suggest: $SUGGEST_STATUS
 verify: $VERIFY_STATUS
 apply: $APPLY_STATUS
+acceptance_rate: $ACCEPTANCE_RATE
 timestamp: $TIMESTAMP
 EOF

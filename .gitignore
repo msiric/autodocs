@@ -18,6 +18,9 @@
 **/autodocs-structural-scan.sh
 **/autodocs-now
 **/config.yaml
+**/feedback/open-prs.json
+**/feedback/outcomes.json
+**/feedback/accuracy.json
 !templates/*.md
 !config.example.yaml
 !examples/**/config.yaml

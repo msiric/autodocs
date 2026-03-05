@@ -18,7 +18,11 @@ For each doc listed in config.docs, check if `${OUTPUT_DIR}/changelog-<doc-name-
 
 Remove from the collected alerts any that already have a changelog entry for the SAME (doc, section, PR). These are "already suggested" — no need to re-generate.
 
-If no alerts remain after deduplication, write the following to `${OUTPUT_DIR}/drift-suggestions.md` and stop:
+**Deduplication against pending PRs:**
+
+If `${OUTPUT_DIR}/feedback/open-prs.json` exists, read it. For each entry with `state: "open"`, extract its (doc, section) pairs from the `suggestions` array. Remove from the collected alerts any (doc, section) that matches a pending PR's suggestion. This prevents generating duplicate suggestions for sections that already have an open autodocs PR awaiting review.
+
+If no alerts remain after both deduplication steps, write the following to `${OUTPUT_DIR}/drift-suggestions.md` and stop:
 
 ```
 ---
