@@ -245,7 +245,30 @@ Once a week, autodocs audits your docs against the actual repo:
 - **Git operations scoped.** Read operations: `git diff-tree`, `git ls-files`, `git fetch`. Write operations (Call 4 only): `git checkout -b`, `git add`, `git commit`, `git push` — always to a feature branch, never to the target branch.
 - **Self-verified suggestions.** Each FIND block is confirmed to exist verbatim in the doc before being applied. Unverified suggestions are skipped.
 - **Multi-model verification.** When enabled, suggestions are independently generated through two different reasoning paths. Only suggestions where both agree are auto-applied. Disputed suggestions require manual review.
-- **Human reviews all changes.** Auto-PRs go through standard ADO review workflow. Branch protection rules apply.
+- **Human reviews all changes.** Auto-PRs go through standard code review workflow. Branch protection rules apply.
+
+## Best practices for optimal results
+
+- **Keep PRs focused.** autodocs produces the most precise suggestions for PRs with <30 changed files. Large feature PRs (50+ files) still trigger drift detection for all affected sections, but suggestions may be less precise for files beyond the diff budget (150 lines per PR).
+- **Use meaningful PR titles and descriptions.** autodocs uses PR titles for `title_hints` matching and descriptions for the "why" in changelogs. Vague titles like "fix stuff" degrade suggestion quality.
+- **Structure your docs with section headers.** `## Section Name` headers enable per-section drift detection. Flat prose without headers gets treated as one block — suggestions are less targeted.
+- **Keep your package_map current.** When you add new packages to the repo, add them to the config. The structural scan (weekly) flags undocumented files, but the mapping determines suggestion quality.
+
+## Multi-repo / Microservices
+
+For teams with multiple repositories, run a separate autodocs instance for each repo. Each instance monitors its own docs and PRs independently.
+
+Cross-repo drift (API change in repo A making docs in repo B stale) is not detected automatically. For critical cross-repo dependencies, consider:
+- Shared documentation in a dedicated docs repo with its own autodocs instance
+- Manual review triggers when API contracts change
+- Using the weekly structural scan to verify cross-referenced file paths
+
+## Known limitations
+
+- **Large PRs (50+ files):** Drift detection covers all files, but the diff budget (150 lines per PR) means only the most relevant files get detailed diffs. Suggestions for undiffed files are REVIEW confidence (not CONFIDENT). The daily report notes "Diff truncated" when this happens.
+- **Cross-repo drift:** Changes in one repo that affect docs in another repo are not detected. See "Multi-repo" section above.
+- **Non-markdown docs:** Only `.md` files are supported. RST, HTML, AsciiDoc, and wiki-based docs are not handled.
+- **Flat prose without headers:** Docs without `##` section headers are treated as a single "Main" section. Suggestions are less targeted. Consider adding headers for better drift detection.
 
 ## License
 
