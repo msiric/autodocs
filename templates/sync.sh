@@ -228,6 +228,18 @@ if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# Post-merge edit detection (signal for "merged and wrong")
+if [ -f "$FEEDBACK_FILE" ] && [ -f "$FEEDBACK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+  corrections=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" detect-corrections "$REPO_DIR" 2>/dev/null)
+  if [ -n "$corrections" ]; then
+    while IFS='|' read -r pr_num strength detail; do
+      [ -z "$pr_num" ] && continue
+      echo "[$TIMESTAMP] CORRECTION SIGNAL: PR #$pr_num ($strength) — $detail" >> "$LOG_FILE"
+      log_metric "correction" "$strength" "0"
+    done <<< "$corrections"
+  fi
+fi
+
 # Stale PR management (two-phase: warn then close, deterministic)
 STALE_HELPER="$SCRIPTS_DIR/stale-helper.py"
 if [ -f "$FEEDBACK_FILE" ] && [ -f "$STALE_HELPER" ] && command -v python3 >/dev/null 2>&1; then
@@ -238,7 +250,7 @@ if [ -f "$FEEDBACK_FILE" ] && [ -f "$STALE_HELPER" ] && command -v python3 >/dev
       if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
         STALE_LABELS=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
           --label "autodocs:stale" --state open \
-          --json number --jq '[.[] | {(.number|tostring): true}] | add // {}' 2>/dev/null || echo "{}")
+          --json number --jq '[.[] | {(.number|tostring): true}] | add // {}' 2>/dev/null) || STALE_LABELS="{}"
       fi
       ;;
   esac
@@ -304,6 +316,17 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       > "$OUTPUT_DIR/resolved-mappings.md" 2>/dev/null || true
   fi
 
+  # Log match rate metric (config drift detection)
+  if [ -f "$OUTPUT_DIR/resolved-mappings.md" ]; then
+    TOTAL_MAPPED=$(wc -l < "$OUTPUT_DIR/resolved-mappings.md" | tr -d ' ')
+    UNMAPPED_COUNT=$(grep -c "UNMAPPED" "$OUTPUT_DIR/resolved-mappings.md" || true)
+    MAPPED_COUNT=$((TOTAL_MAPPED - UNMAPPED_COUNT))
+    log_metric "match-rate" "$MAPPED_COUNT/$TOTAL_MAPPED" "0"
+    if [ "$TOTAL_MAPPED" -gt 5 ] && [ "$MAPPED_COUNT" -eq 0 ]; then
+      echo "[$TIMESTAMP] WARN: 0/$TOTAL_MAPPED files matched package_map. Check config." >> "$LOG_FILE"
+    fi
+  fi
+
   # Pre-process drift detection (deterministic: parse, group, dedup, lifecycle)
   DRIFT_HELPER="$SCRIPTS_DIR/drift-helper.py"
   if [ -f "$DRIFT_HELPER" ] && command -v python3 >/dev/null 2>&1; then
@@ -339,6 +362,16 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       python3 "$DRIFT_HELPER" suggest-dedup "$OUTPUT_DIR" 2>/dev/null || true
     fi
 
+    # Copy mapped source files for suggest context (ground truth for the LLM)
+    mkdir -p "$OUTPUT_DIR/source-context"
+    rm -f "$OUTPUT_DIR/source-context/"* 2>/dev/null
+    if [ -f "$OUTPUT_DIR/resolved-mappings.md" ]; then
+      MAPPED_FILES=$(grep -v "UNMAPPED" "$OUTPUT_DIR/resolved-mappings.md" 2>/dev/null | awk '{print $2}' | sort -u || true)
+      for src in $MAPPED_FILES; do
+        [ -n "$src" ] && [ -f "$REPO_DIR/$src" ] && cp "$REPO_DIR/$src" "$OUTPUT_DIR/source-context/" 2>/dev/null || true
+      done
+    fi
+
     SUGGEST_OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
       --add-dir "$OUTPUT_DIR" \
       --allowedTools "Read,Write" \
@@ -358,6 +391,12 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
       if [ -f "$DRIFT_HELPER" ] && command -v python3 >/dev/null 2>&1; then
         python3 "$DRIFT_HELPER" verify-finds "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
           echo "[$TIMESTAMP] FIND VERIFY: some FIND blocks failed verification" >> "$LOG_FILE"
+      fi
+
+      # Deterministic REPLACE verification (checks output values against source code)
+      if [ -f "$DRIFT_HELPER" ] && [ -d "$OUTPUT_DIR/source-context" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$DRIFT_HELPER" verify-replaces "$OUTPUT_DIR" 2>/dev/null || \
+          echo "[$TIMESTAMP] REPLACE VERIFY: some suggestions BLOCKED (value mismatch)" >> "$LOG_FILE"
       fi
 
       # Call 3v: Shadow verification (log only, does not gate apply)
@@ -440,6 +479,14 @@ timestamp: $TIMESTAMP
 EOF
 
 # Record successful completion time for lookback dedup
+# Only advance timestamp if we processed relevant PRs or there were no PRs
+# This prevents "all classified NO → timestamp advances → PRs lost forever"
 if [ "$SYNC_STATUS" = "success" ]; then
-  date -u +"%Y-%m-%dT%H:%M:%SZ" > "$OUTPUT_DIR/last-successful-run"
+  RELEVANT_COUNT=$(grep -cE "YES|MAYBE" "$OUTPUT_DIR/daily-report.md" 2>/dev/null || echo 0)
+  PR_COUNT_VAL=$(grep "^pr_count:" "$OUTPUT_DIR/daily-report.md" 2>/dev/null | awk '{print $2}' || echo 0)
+  if [ "$RELEVANT_COUNT" -gt 0 ] || [ "${PR_COUNT_VAL:-0}" -eq 0 ]; then
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$OUTPUT_DIR/last-successful-run"
+  else
+    echo "[$TIMESTAMP] WARN: ${PR_COUNT_VAL} PRs found, 0 relevant. Timestamp not advanced." >> "$LOG_FILE"
+  fi
 fi
