@@ -32,16 +32,11 @@ Extract:
 
 ## Step 2: Determine Lookback Window
 
-**Today's date:** Read `${OUTPUT_DIR}/current-date.txt` — this is the authoritative current date. Use this as today's date for the report frontmatter (`date:` field) and for all lookback calculations. Do NOT use the date from the previous daily-report.md as today's date.
+Read these two files (both written by the pipeline before this call):
+- `${OUTPUT_DIR}/current-date.txt` — **today's date**. Use this as the `date:` field in the report frontmatter.
+- `${OUTPUT_DIR}/lookback-date.txt` — the **lookback start date**. Fetch PRs merged on or after this date.
 
-Read the file `${OUTPUT_DIR}/daily-report.md` (if it exists) to get the previous report's `date` field.
-
-Determine the lookback window using these rules IN ORDER (first match wins):
-1. If `${OUTPUT_DIR}/last-successful-run` exists, read the ISO timestamp. Use it as the lookback start with a 6-hour overlap buffer (subtract 6 hours). This prevents re-processing PRs from previous runs while covering clock skew.
-2. If today is **Monday** → look back **72 hours** (to Friday evening).
-3. If the previous `daily-report.md` does not exist or has no `date` field → look back **24 hours**.
-4. If the previous report's `date` field is more than 24 hours ago → look back to that date.
-5. Otherwise → look back **24 hours**.
+Do NOT compute the lookback yourself. Do NOT use dates from the previous daily-report.md. The lookback date is pre-computed by the pipeline.
 
 ## Step 3: Fetch PRs
 
@@ -52,7 +47,7 @@ Check the `platform` field from config. Follow the instructions for your platfor
 Use Bash to fetch merged PRs:
 ```
 gh pr list -R <github.owner>/<github.repo> --state merged \
-  --search "merged:>=<lookback_date_YYYY-MM-DD>" \
+  --search "merged:>=<date from lookback-date.txt>" \
   --json number,title,body,mergedAt,mergeCommit,files,author,reviews \
   --limit 100
 ```

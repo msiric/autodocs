@@ -297,8 +297,15 @@ EOF
 fi
 
 # Call 1: Main sync (PRs + telemetry)
-# Write current date for the sync prompt (prevents LLM date anchoring on old reports)
-date -u +"%Y-%m-%d" > "$OUTPUT_DIR/current-date.txt"
+# Compute lookback date deterministically (prevents LLM date anchoring on old reports)
+TODAY=$(date -u +"%Y-%m-%d")
+echo "$TODAY" > "$OUTPUT_DIR/current-date.txt"
+if [ -f "$OUTPUT_DIR/last-successful-run" ]; then
+  LOOKBACK_DATE=$(cat "$OUTPUT_DIR/last-successful-run" | cut -c1-10)
+else
+  LOOKBACK_DATE=$(date -u -v-1d +"%Y-%m-%d" 2>/dev/null || date -u -d "1 day ago" +"%Y-%m-%d" 2>/dev/null || echo "$TODAY")
+fi
+echo "$LOOKBACK_DATE" > "$OUTPUT_DIR/lookback-date.txt"
 
 OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
   --add-dir "$OUTPUT_DIR" \

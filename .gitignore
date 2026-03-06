@@ -24,6 +24,7 @@
 **/resolved-mappings.md
 **/last-successful-run
 **/current-date.txt
+**/lookback-date.txt
 **/metrics.jsonl
 **/drift-context.json
 **/suggest-context.json
