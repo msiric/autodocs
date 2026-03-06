@@ -136,166 +136,39 @@ if [ "$(read_config telemetry.enabled || true)" = "true" ]; then
   SYNC_TOOLS="$SYNC_TOOLS,mcp__kusto-mcp__kusto_query"
 fi
 
-# Feedback: discover + check state of pending autodocs PRs (bash only, no LLM call)
+# Pre-sync: discovery, feedback state, corrections, stale management, open PR limit
+# All platform CLI calls happen in Python — no set -e traps on gh/glab/curl/az
 FEEDBACK_FILE="$OUTPUT_DIR/feedback/open-prs.json"
-FEEDBACK_HELPER="$SCRIPTS_DIR/feedback-helper.py"
+PIPELINE_HELPER="$SCRIPTS_DIR/pipeline-helper.py"
+if [ -f "$PIPELINE_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+  python3 "$PIPELINE_HELPER" pre-sync "$OUTPUT_DIR" "$REPO_DIR" "$PLATFORM" 2>/dev/null || true
 
-# Read platform config once for feedback operations
-FB_GH_OWNER="" ; FB_GH_REPO=""
-FB_GL_PROJECT=""
-FB_BB_WS="" ; FB_BB_REPO=""
-FB_ADO_ORG="" ; FB_ADO_PROJECT=""
-if command -v python3 >/dev/null 2>&1; then
-  case "$PLATFORM" in
-    github)    FB_GH_OWNER=$(read_config github.owner || true); FB_GH_REPO=$(read_config github.repo || true) ;;
-    gitlab)    FB_GL_PROJECT=$(read_config gitlab.project_path || true) ;;
-    bitbucket) FB_BB_WS=$(read_config bitbucket.workspace || true); FB_BB_REPO=$(read_config bitbucket.repo || true) ;;
-    ado)       FB_ADO_ORG=$(read_config ado.org || true); FB_ADO_PROJECT=$(read_config ado.project || true) ;;
-  esac
-fi
-
-# Discover existing autodocs PRs not yet tracked (bootstrap + orphan recovery)
-if command -v python3 >/dev/null 2>&1 && [ -f "$FEEDBACK_HELPER" ]; then
-  mkdir -p "$OUTPUT_DIR/feedback"
-  case "$PLATFORM" in
-    github)
-      if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
-        discovered=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
-          --search "head:autodocs/ is:open" \
-          --json number,createdAt --limit 50 2>/dev/null || true)
-        if [ -n "$discovered" ] && [ "$discovered" != "[]" ]; then
-          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" discover "$discovered" github 2>/dev/null || true
-        fi
-      fi
-      ;;
-  esac
-fi
-
-# Check state of tracked PRs (merged/closed)
-if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
-  if [ -f "$FEEDBACK_HELPER" ]; then
-    open_prs=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null)
-    if [ -n "$open_prs" ]; then
-      while IFS= read -r pr_num; do
-        [ -z "$pr_num" ] && continue
-        pr_state=""
-        case "$PLATFORM" in
-          github)
-            if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
-              pr_state=$(gh pr view "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" --json state --jq '.state' 2>/dev/null || true)
-            fi
-            ;;
-          gitlab)
-            if [ -n "$FB_GL_PROJECT" ] && command -v glab >/dev/null 2>&1; then
-              gl_raw=$(glab mr view "$pr_num" -R "$FB_GL_PROJECT" -F json 2>/dev/null \
-                | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
-              case "$gl_raw" in
-                merged) pr_state="MERGED" ;;
-                closed) pr_state="CLOSED" ;;
-              esac
-            fi
-            ;;
-          bitbucket)
-            if [ -n "$FB_BB_WS" ] && [ -n "$FB_BB_REPO" ] && [ -n "${BITBUCKET_TOKEN:-}" ]; then
-              bb_raw=$(curl -s -H "Authorization: Bearer $BITBUCKET_TOKEN" \
-                "https://api.bitbucket.org/2.0/repositories/$FB_BB_WS/$FB_BB_REPO/pullrequests/$pr_num" \
-                | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
-              case "$bb_raw" in
-                MERGED) pr_state="MERGED" ;;
-                DECLINED|SUPERSEDED) pr_state="CLOSED" ;;
-              esac
-            fi
-            ;;
-          ado)
-            if [ -n "$FB_ADO_ORG" ] && [ -n "$FB_ADO_PROJECT" ] && command -v az >/dev/null 2>&1; then
-              ado_raw=$(az repos pr show --id "$pr_num" \
-                --org "https://dev.azure.com/$FB_ADO_ORG" -p "$FB_ADO_PROJECT" \
-                --query "status" -o tsv 2>/dev/null)
-              case "$ado_raw" in
-                completed) pr_state="MERGED" ;;
-                abandoned) pr_state="CLOSED" ;;
-              esac
-            fi
-            ;;
-        esac
-        if [ "$pr_state" = "MERGED" ]; then
-          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" update-pr "$pr_num" merged "$(date +%Y-%m-%d)"
-          echo "[$TIMESTAMP] FEEDBACK: PR #$pr_num merged" >> "$LOG_FILE"
-        elif [ "$pr_state" = "CLOSED" ]; then
-          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" update-pr "$pr_num" closed
-          echo "[$TIMESTAMP] FEEDBACK: PR #$pr_num closed" >> "$LOG_FILE"
-        fi
-      done <<< "$open_prs"
+  # Log entries from pre-sync
+  if [ -f "$OUTPUT_DIR/pre-sync-result.json" ]; then
+    PRE_SYNC_LOG=$(python3 -c "
+import json
+d = json.load(open('$OUTPUT_DIR/pre-sync-result.json'))
+print('\n'.join(d.get('log', [])))
+" 2>/dev/null || true)
+    if [ -n "$PRE_SYNC_LOG" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] && echo "[$TIMESTAMP] $line" >> "$LOG_FILE"
+      done <<< "$PRE_SYNC_LOG"
     fi
-  fi
-fi
 
-# Post-merge edit detection (signal for "merged and wrong")
-if [ -f "$FEEDBACK_FILE" ] && [ -f "$FEEDBACK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
-  corrections=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" detect-corrections "$REPO_DIR" 2>/dev/null)
-  if [ -n "$corrections" ]; then
-    while IFS='|' read -r pr_num strength detail; do
-      [ -z "$pr_num" ] && continue
-      echo "[$TIMESTAMP] CORRECTION SIGNAL: PR #$pr_num ($strength) — $detail" >> "$LOG_FILE"
-      log_metric "correction" "$strength" "0"
-    done <<< "$corrections"
-  fi
-fi
-
-# Stale PR management (two-phase: warn then close, deterministic)
-STALE_HELPER="$SCRIPTS_DIR/stale-helper.py"
-if [ -f "$FEEDBACK_FILE" ] && [ -f "$STALE_HELPER" ] && command -v python3 >/dev/null 2>&1; then
-  # Collect stale labels from platform (which open PRs have autodocs:stale)
-  STALE_LABELS="{}"
-  case "$PLATFORM" in
-    github)
-      if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
-        STALE_LABELS=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
-          --label "autodocs:stale" --state open \
-          --json number --jq '[.[] | {(.number|tostring): true}] | add // {}' 2>/dev/null) || STALE_LABELS="{}"
-      fi
-      ;;
-  esac
-
-  stale_output=$(python3 "$STALE_HELPER" "$FEEDBACK_FILE" "$OUTPUT_DIR/config.yaml" "$REPO_DIR" \
-    list-stale "$(date +%Y-%m-%d)" "$STALE_LABELS" 2>/dev/null)
-  if [ -n "$stale_output" ]; then
-    while IFS='|' read -r pr_num action reason; do
-      [ -z "$pr_num" ] && continue
-      case "$PLATFORM" in
-        github)
-          if [ "$action" = "warn" ]; then
-            gh pr comment "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" \
-              --body "**autodocs**: $reason. This PR will be auto-closed in 7 days if no activity. Add label \`autodocs:keep-open\` to prevent." 2>/dev/null || true
-            gh pr edit "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" --add-label "autodocs:stale" 2>/dev/null || true
-          elif [ "$action" = "close" ]; then
-            gh pr comment "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" \
-              --body "**autodocs**: Closing — $reason. A fresh PR will be generated if changes are still needed." 2>/dev/null || true
-            gh pr close "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" 2>/dev/null || true
-            python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" update-pr "$pr_num" closed 2>/dev/null || true
-          fi
-          echo "[$TIMESTAMP] STALE: $action PR #$pr_num ($reason)" >> "$LOG_FILE"
-          ;;
-      esac
-    done <<< "$stale_output"
-  fi
-fi
-
-# Check open PR limit (prevent accumulation)
-MAX_OPEN=$(read_config limits.max_open_prs || true)
-[ -z "$MAX_OPEN" ] && MAX_OPEN=10
-if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
-  OPEN_COUNT=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null | wc -l | tr -d ' ' || true)
-  [ -z "$OPEN_COUNT" ] && OPEN_COUNT=0
-  if [ "$OPEN_COUNT" -ge "$MAX_OPEN" ]; then
-    echo "[$TIMESTAMP] SKIPPED — $OPEN_COUNT open PRs (limit: $MAX_OPEN). Review existing PRs first." >> "$LOG_FILE"
-    log_metric "sync" "skipped-open-limit" "0"
-    cat > "$STATUS_FILE" <<EOF
+    # Check if we should proceed (open PR limit)
+    PROCEED=$(python3 -c "import json;print(json.load(open('$OUTPUT_DIR/pre-sync-result.json')).get('proceed', True))" 2>/dev/null || echo "True")
+    if [ "$PROCEED" = "False" ]; then
+      SKIP_REASON=$(python3 -c "import json;print(json.load(open('$OUTPUT_DIR/pre-sync-result.json')).get('skip_reason',''))" 2>/dev/null || echo "")
+      echo "[$TIMESTAMP] SKIPPED — $SKIP_REASON" >> "$LOG_FILE"
+      log_metric "sync" "skipped-open-limit" "0"
+      cat > "$STATUS_FILE" <<EOF
 status: skipped
-reason: open PR limit ($OPEN_COUNT/$MAX_OPEN)
+reason: $SKIP_REASON
 timestamp: $TIMESTAMP
 EOF
-    exit 0
+      exit 0
+    fi
   fi
 fi
 
@@ -313,8 +186,10 @@ echo "$LOOKBACK_DATE" > "$OUTPUT_DIR/lookback-date.txt"
 # Pre-fetch PRs deterministically (GitHub only — other platforms use LLM tool calls)
 case "$PLATFORM" in
   github)
-    if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
-      gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" --state merged \
+    GH_OWNER=$(read_config github.owner || true)
+    GH_REPO=$(read_config github.repo || true)
+    if [ -n "$GH_OWNER" ] && [ -n "$GH_REPO" ]; then
+      gh pr list -R "$GH_OWNER/$GH_REPO" --state merged \
         --search "merged:>=$LOOKBACK_DATE" \
         --json number,title,body,mergedAt,mergeCommit,files,author,reviews \
         --limit 100 > "$OUTPUT_DIR/fetched-prs.json" 2>/dev/null || true
@@ -387,13 +262,8 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
     fi
 
     # Copy mapped source files for suggest context (ground truth for the LLM)
-    mkdir -p "$OUTPUT_DIR/source-context"
-    rm -f "$OUTPUT_DIR/source-context/"* 2>/dev/null
-    if [ -f "$OUTPUT_DIR/resolved-mappings.md" ]; then
-      MAPPED_FILES=$(grep -v "UNMAPPED" "$OUTPUT_DIR/resolved-mappings.md" 2>/dev/null | awk '{print $2}' | sort -u || true)
-      for src in $MAPPED_FILES; do
-        [ -n "$src" ] && [ -f "$REPO_DIR/$src" ] && cp "$REPO_DIR/$src" "$OUTPUT_DIR/source-context/" 2>/dev/null || true
-      done
+    if [ -f "$PIPELINE_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+      python3 "$PIPELINE_HELPER" copy-sources "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || true
     fi
 
     SUGGEST_OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/suggest-prompt.md")" \
