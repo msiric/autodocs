@@ -75,7 +75,7 @@ For mapped files (directories matching `package_map`), get targeted diffs:
 ```
 git diff -U3 <mergeCommit.oid>^..<mergeCommit.oid> -- <file>
 ```
-Same filtering and budget rules: skip tests/generated files, 150 lines per PR max.
+Same filtering and diff budget rules as the ADO section above (full diff for mapped files, stat-only for unmapped, skip noise files).
 
 If `gh` fails or returns an error, skip Steps 3-5 entirely. Set `sync_status: partial`.
 
@@ -98,7 +98,7 @@ This returns MRs as JSON, filtered by update date. For each MR:
   ```
   git diff -U3 <merge_commit_sha>^..<merge_commit_sha> -- <file>
   ```
-  Same filtering and budget rules as other platforms (skip tests/generated, 150 lines per PR).
+  Same filtering and diff budget rules as other platforms (full diff for mapped files, stat-only for unmapped, skip noise files).
 - Extract `title` and `description` (truncate description to 500 chars)
 - For reviews: the JSON may include approvals. Summarize human review comments if available.
 
@@ -124,7 +124,7 @@ This returns a JSON response with a `values` array, sorted by most recent. For e
   ```
   git diff -U3 <merge_commit_hash>^..<merge_commit_hash> -- <file>
   ```
-  Same filtering and budget rules as other platforms.
+  Same filtering and diff budget rules as other platforms.
 - Extract `title` and `description` (truncate description to 500 chars)
 - For reviews: check the `reviewers` array in the PR response for approval status.
 
@@ -160,7 +160,11 @@ For each PR that passes the filter:
    ```
    git diff -U3 <commit>^..<commit> -- <file>
    ```
-   Only diff files whose directory matches a key in the config's `package_map`. Skip test files (`*.test.*`, `*.spec.*`), generated files (`*.generated.*`, `*.min.*`, `dist/`, `build/`), and lock files. If config has `exclude_patterns`, also skip files matching those patterns. Limit to 150 lines of diff total per PR — if exceeded, stop and note "Diff truncated."
+   **Diff budget — prioritize mapped files:**
+   - For files whose directory matches a key in `package_map`: include the FULL diff (no line limit). These are the files most likely to affect documentation.
+   - For other files in `relevant_paths` but not in `package_map`: include only a stat summary (e.g., "+20 -5 src/utils/helpers.ts"), no diff content.
+   - Prioritize files by number of changed hunks (most changes first), not alphabetically.
+   - Skip these files entirely (no diff, no stat): `*.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `*.test.*`, `*.spec.*`, `*.generated.*`, `*.min.*`, `*.map`, `*.d.ts`, `dist/`, `build/`, `.next/`, `out/`, `node_modules/`, `vendor/`, `.venv/`, `__pycache__/`. If config has `exclude_patterns`, also skip files matching those patterns.
 
 5. Extract the PR description (the `description` field, or `completionOptions.mergeCommitMessage` if description is empty). If longer than 500 characters, truncate with "..."
 

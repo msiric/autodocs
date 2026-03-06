@@ -26,6 +26,8 @@
 **/metrics.jsonl
 **/drift-context.json
 **/suggest-context.json
+**/source-context/
+**/replace-verification.json
 !templates/*.md
 !config.example.yaml
 !examples/**/config.yaml
