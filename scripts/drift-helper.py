@@ -741,7 +741,7 @@ def strip_code_comments(text):
     return text
 
 
-def verify_replaces(output_dir):
+def verify_replaces(output_dir, repo_dir=None):
     """Verify REPLACE text values against source code files.
 
     For each suggestion, extracts concrete values from REPLACE text and checks
@@ -798,7 +798,7 @@ def verify_replaces(output_dir):
                 if current_replace and current_doc:
                     replace_text = "\n".join(current_replace)
                     values = _extract_values(replace_text)
-                    verified = _verify_values(values, combined_source, source_corpus)
+                    verified = _verify_values(values, combined_source, source_corpus, repo_dir)
                     gate = _gate_decision(verified)
                     results.append({
                         "doc": current_doc,
@@ -811,7 +811,7 @@ def verify_replaces(output_dir):
     if in_replace and current_replace and current_doc:
         replace_text = "\n".join(current_replace)
         values = _extract_values(replace_text)
-        verified = _verify_values(values, combined_source, source_corpus)
+        verified = _verify_values(values, combined_source, source_corpus, repo_dir)
         gate = _gate_decision(verified)
         results.append({
             "doc": current_doc,
@@ -844,14 +844,30 @@ def _extract_values(replace_text):
     return values
 
 
-def _verify_values(values, combined_source, source_corpus):
+def _verify_values(values, combined_source, source_corpus, repo_dir=None):
     """Verify each value against source corpus. Returns list with status."""
     results = []
     for v in values:
         val = v["value"]
         found_in = None
 
-        # Search each source file
+        # File paths: verify by checking if the file exists in repo
+        if v["type"] == "file_path" and repo_dir:
+            file_path = Path(repo_dir) / val
+            if file_path.exists():
+                results.append({
+                    "value": val, "type": v["type"],
+                    "status": "EVIDENCED", "source": "repo",
+                })
+            else:
+                results.append({
+                    "value": val, "type": v["type"],
+                    "status": "MISMATCH",
+                    "reason": f"file '{val}' does not exist in repo",
+                })
+            continue
+
+        # Search each source file for string values
         for filename, content in source_corpus.items():
             if val in content:
                 found_in = filename
@@ -941,7 +957,8 @@ def main():
         ok = verify_finds(output_dir, repo_dir)
         sys.exit(0 if ok else 1)
     elif operation == "verify-replaces":
-        verify_replaces(output_dir)
+        repo_dir = sys.argv[3] if len(sys.argv) > 3 else None
+        verify_replaces(output_dir, repo_dir)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)

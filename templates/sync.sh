@@ -416,7 +416,7 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
 
       # Deterministic REPLACE verification (checks output values against source code)
       if [ -f "$DRIFT_HELPER" ] && [ -d "$OUTPUT_DIR/source-context" ] && command -v python3 >/dev/null 2>&1; then
-        python3 "$DRIFT_HELPER" verify-replaces "$OUTPUT_DIR" 2>/dev/null || \
+        python3 "$DRIFT_HELPER" verify-replaces "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
           echo "[$TIMESTAMP] REPLACE VERIFY: some suggestions BLOCKED (value mismatch)" >> "$LOG_FILE"
       fi
 
