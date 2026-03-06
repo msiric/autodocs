@@ -23,6 +23,7 @@
 **/feedback/accuracy.json
 **/resolved-mappings.md
 **/last-successful-run
+**/current-date.txt
 **/metrics.jsonl
 **/drift-context.json
 **/suggest-context.json

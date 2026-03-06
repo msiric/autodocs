@@ -32,13 +32,15 @@ Extract:
 
 ## Step 2: Determine Lookback Window
 
-Read the file `${OUTPUT_DIR}/daily-report.md`. If it exists, parse the YAML frontmatter and extract the `date` field.
+**Today's date:** Read `${OUTPUT_DIR}/current-date.txt` — this is the authoritative current date. Use this as today's date for the report frontmatter (`date:` field) and for all lookback calculations. Do NOT use the date from the previous daily-report.md as today's date.
+
+Read the file `${OUTPUT_DIR}/daily-report.md` (if it exists) to get the previous report's `date` field.
 
 Determine the lookback window using these rules IN ORDER (first match wins):
 1. If `${OUTPUT_DIR}/last-successful-run` exists, read the ISO timestamp. Use it as the lookback start with a 6-hour overlap buffer (subtract 6 hours). This prevents re-processing PRs from previous runs while covering clock skew.
 2. If today is **Monday** → look back **72 hours** (to Friday evening).
-3. If `daily-report.md` does not exist or has no `date` field → look back **24 hours**.
-4. If the `date` field is more than 24 hours ago → look back to that date.
+3. If the previous `daily-report.md` does not exist or has no `date` field → look back **24 hours**.
+4. If the previous report's `date` field is more than 24 hours ago → look back to that date.
 5. Otherwise → look back **24 hours**.
 
 ## Step 3: Fetch PRs
@@ -242,7 +244,7 @@ The file MUST have this exact structure — YAML frontmatter followed by markdow
 
 ```
 ---
-date: YYYY-MM-DD
+date: <today's date from current-date.txt>
 sync_status: success
 pr_count: <total PRs found>
 feature_prs: <PRs classified as YES or MAYBE>

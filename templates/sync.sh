@@ -297,6 +297,8 @@ EOF
 fi
 
 # Call 1: Main sync (PRs + telemetry)
+# Write current date for the sync prompt (prevents LLM date anchoring on old reports)
+date -u +"%Y-%m-%d" > "$OUTPUT_DIR/current-date.txt"
 
 OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
   --add-dir "$OUTPUT_DIR" \
