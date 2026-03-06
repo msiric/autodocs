@@ -94,6 +94,56 @@ def handle_acceptance_rate(data):
     print(f"{rate:.2f}")
 
 
+def handle_detect_corrections(data, args):
+    """Detect post-merge edits that may indicate incorrect autodocs suggestions.
+
+    Scans merged autodocs PRs from the last 14 days. For each, checks if
+    non-autodocs commits edited the same doc files within 7 days of merge.
+    Outputs: pr_number|strength|detail (one per line).
+    """
+    import subprocess
+    from datetime import datetime as dt, timedelta
+
+    repo_dir = args[0] if args else "."
+    today = dt.now()
+
+    for pr in data:
+        if pr.get("state") != "merged":
+            continue
+        merged_date_str = pr.get("merged_date", "")
+        if not merged_date_str:
+            continue
+        try:
+            merged_date = dt.strptime(merged_date_str, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if (today - merged_date).days > 14:
+            continue
+
+        # Check for human edits to doc files within 7 days of merge
+        since = merged_date_str
+        until = (merged_date + timedelta(days=7)).strftime("%Y-%m-%d")
+
+        for s in pr.get("suggestions", []):
+            doc = s.get("doc", "")
+            if not doc:
+                continue
+            try:
+                result = subprocess.run(
+                    ["git", "-C", repo_dir, "log", "--oneline",
+                     f"--since={since}", f"--until={until}",
+                     "--", f"docs/{doc}"],
+                    capture_output=True, text=True, timeout=10
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+            commits = [l for l in result.stdout.strip().splitlines()
+                       if l and "autodocs" not in l.lower()]
+            if commits:
+                print(f"{pr['pr_number']}|SECTION_EDIT|{doc} edited by {len(commits)} commit(s) within 7 days of merge")
+                break  # One signal per PR is enough
+
+
 def handle_discover(data, args):
     """Backfill open-prs.json from platform PR search results (JSON string)."""
     try:
@@ -144,6 +194,8 @@ def main():
     elif operation == "discover":
         handle_discover(data, args)
         save_data(path, data)
+    elif operation == "detect-corrections":
+        handle_detect_corrections(data, args)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)

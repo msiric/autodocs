@@ -546,14 +546,54 @@ def suggest_dedup(output_dir):
             "confidence": entry["confidence"],
         })
 
+    # Detect changelog supersession (warn when later PRs touch same files)
+    changelog_warnings = _detect_changelog_supersession(output_dir, changelog_entries)
+
     context = {
         "actionable_alerts": actionable,
         "skipped": skipped,
+        "changelog_warnings": changelog_warnings,
     }
 
     (output_dir / "suggest-context.json").write_text(
         json.dumps(context, indent=2) + "\n"
     )
+
+
+def _detect_changelog_supersession(output_dir, changelog_entries):
+    """Flag changelog entries whose files were modified by later PRs."""
+    warnings = []
+    report = parse_report(output_dir / "daily-report.md")
+
+    # Build pr_number → file paths mapping
+    pr_files = {}
+    for pr in report.get("prs", []):
+        pr_files[pr["number"]] = [f["path"] for f in pr.get("files", [])]
+
+    # For each changelog entry, check if a later PR touched the same files
+    seen = set()
+    for (doc, section, pr_num) in changelog_entries:
+        files_for_pr = pr_files.get(pr_num, [])
+        if not files_for_pr:
+            continue
+        for other_pr, other_files in pr_files.items():
+            if other_pr <= pr_num:
+                continue
+            shared = set(files_for_pr) & set(other_files)
+            if shared:
+                key = (doc, section, pr_num)
+                if key not in seen:
+                    seen.add(key)
+                    warnings.append({
+                        "doc": doc,
+                        "section": section,
+                        "pr": pr_num,
+                        "superseded_by": other_pr,
+                        "shared_files": sorted(shared),
+                    })
+                break
+
+    return warnings
 
 
 def verify_finds(output_dir, repo_dir):
@@ -649,6 +689,202 @@ def verify_finds(output_dir, repo_dir):
     return failed == 0
 
 
+# ---------------------------------------------------------------------------
+# REPLACE value verification
+# ---------------------------------------------------------------------------
+
+# Patterns to extract verifiable values from REPLACE text
+REPLACE_EXTRACTORS = [
+    ("backtick_id", re.compile(r"`(\w[\w.]*)`")),
+    ("single_quoted", re.compile(r"'([^']{2,})'")),
+    ("double_quoted", re.compile(r'"([^"]{2,})"')),
+    ("file_path", re.compile(r"(?:src|lib|app)/[\w/.-]+\.\w+")),
+    ("http_method", re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\b")),
+    ("endpoint_path", re.compile(r"(/[a-z][\w/-]*(?:/:\w+)*)")),
+    ("error_code", re.compile(r"\b([A-Z][A-Z0-9_]{2,})\b")),
+]
+
+# Common words that aren't code references (reduce false MISMATCH)
+SKIP_VALUES = {
+    "FIND", "REPLACE", "INSERT", "AFTER", "YES", "NO", "HIGH", "LOW",
+    "CRITICAL", "REVIEW", "CONFIDENT", "GET", "POST", "PUT", "PATCH",
+    "DELETE", "HEAD", "OPTIONS", "HTTP", "API", "URL", "JSON", "HTML",
+    "CSS", "SQL", "EOF", "TODO", "NOTE", "YAML", "TRUE", "FALSE",
+}
+
+
+def find_function_containing(source_text, value):
+    """Find which function body contains a value. Returns function name or None."""
+    for match in re.finditer(
+        r"(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(", source_text
+    ):
+        func_name = match.group(1)
+        brace_start = source_text.find("{", match.end())
+        if brace_start == -1:
+            continue
+        depth, pos = 1, brace_start + 1
+        while pos < len(source_text) and depth > 0:
+            if source_text[pos] == "{":
+                depth += 1
+            elif source_text[pos] == "}":
+                depth -= 1
+            pos += 1
+        if value in source_text[brace_start:pos]:
+            return func_name
+    return None
+
+
+def strip_code_comments(text):
+    """Strip JS/TS comments from source code for cleaner matching."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"//.*", "", text)
+    return text
+
+
+def verify_replaces(output_dir):
+    """Verify REPLACE text values against source code files.
+
+    For each suggestion, extracts concrete values from REPLACE text and checks
+    them against the source files in source-context/. Three outcomes per value:
+    EVIDENCED (found), MISMATCH (contradicted), UNVERIFIED (not found, not contradicted).
+    """
+    output_dir = Path(output_dir)
+    suggestions_path = output_dir / "drift-suggestions.md"
+    source_dir = output_dir / "source-context"
+
+    if not suggestions_path.exists() or not source_dir.exists():
+        return
+
+    # Load all source files (stripped of comments)
+    source_corpus = {}
+    for src_file in source_dir.iterdir():
+        if src_file.is_file():
+            source_corpus[src_file.name] = strip_code_comments(src_file.read_text())
+
+    if not source_corpus:
+        return
+
+    combined_source = "\n".join(source_corpus.values())
+
+    # Parse suggestions and their REPLACE blocks
+    text = suggestions_path.read_text()
+    results = []
+    current_doc = ""
+    current_section = ""
+    current_replace = []
+    in_replace = False
+
+    for line in text.splitlines():
+        doc_match = re.match(r"## (\S+\.md)\s*—\s*(.*)", line)
+        if doc_match:
+            current_doc = doc_match.group(1)
+            current_section = doc_match.group(2).strip()
+            continue
+
+        if "### REPLACE WITH:" in line or "### INSERT AFTER:" in line:
+            in_replace = True
+            current_replace = []
+            continue
+
+        if in_replace:
+            if line.startswith("> "):
+                current_replace.append(line[2:])
+                continue
+            elif line.strip() == "":
+                continue
+            else:
+                # End of REPLACE block — verify values
+                in_replace = False
+                if current_replace and current_doc:
+                    replace_text = "\n".join(current_replace)
+                    values = _extract_values(replace_text)
+                    verified = _verify_values(values, combined_source, source_corpus)
+                    gate = _gate_decision(verified)
+                    results.append({
+                        "doc": current_doc,
+                        "section": current_section,
+                        "gate": gate,
+                        "values": verified,
+                    })
+
+    (output_dir / "replace-verification.json").write_text(
+        json.dumps(results, indent=2) + "\n"
+    )
+
+    blocked = sum(1 for r in results if r["gate"] == "BLOCK")
+    if blocked:
+        print(f"REPLACE verification: {blocked} suggestion(s) BLOCKED", file=sys.stderr)
+    return blocked == 0
+
+
+def _extract_values(replace_text):
+    """Extract verifiable values from REPLACE text."""
+    values = []
+    seen = set()
+    for name, pattern in REPLACE_EXTRACTORS:
+        for match in pattern.finditer(replace_text):
+            val = match.group(1) if match.lastindex else match.group(0)
+            if val in seen or val in SKIP_VALUES or len(val) < 2:
+                continue
+            seen.add(val)
+            values.append({"value": val, "type": name})
+    return values
+
+
+def _verify_values(values, combined_source, source_corpus):
+    """Verify each value against source corpus. Returns list with status."""
+    results = []
+    for v in values:
+        val = v["value"]
+        found_in = None
+
+        # Search each source file
+        for filename, content in source_corpus.items():
+            if val in content:
+                found_in = filename
+                break
+
+        if found_in:
+            results.append({
+                "value": val,
+                "type": v["type"],
+                "status": "EVIDENCED",
+                "source": found_in,
+            })
+        else:
+            # Check if it's a quoted literal that has a DIFFERENT value in the same context
+            # e.g., REPLACE says 'viewer' but source has 'member' in the same pattern
+            if v["type"] in ("single_quoted", "double_quoted"):
+                # Look for the value's key (what it's assigned to) in the REPLACE context
+                # This is a heuristic — if the value doesn't exist anywhere, it's likely wrong
+                results.append({
+                    "value": val,
+                    "type": v["type"],
+                    "status": "MISMATCH",
+                    "reason": f"'{val}' not found in any source file",
+                })
+            else:
+                results.append({
+                    "value": val,
+                    "type": v["type"],
+                    "status": "UNVERIFIED",
+                })
+    return results
+
+
+def _gate_decision(verified_values):
+    """Determine gate: BLOCK, AUTO_APPLY, or REVIEW."""
+    if not verified_values:
+        return "REVIEW"
+    has_mismatch = any(v["status"] == "MISMATCH" for v in verified_values)
+    has_evidenced = any(v["status"] == "EVIDENCED" for v in verified_values)
+    if has_mismatch:
+        return "BLOCK"
+    if has_evidenced:
+        return "AUTO_APPLY"
+    return "REVIEW"
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -665,6 +901,8 @@ def main():
         repo_dir = sys.argv[3] if len(sys.argv) > 3 else "."
         ok = verify_finds(output_dir, repo_dir)
         sys.exit(0 if ok else 1)
+    elif operation == "verify-replaces":
+        verify_replaces(output_dir)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)

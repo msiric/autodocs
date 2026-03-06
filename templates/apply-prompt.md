@@ -22,9 +22,15 @@ Filter suggestions to only those with BOTH:
 - **Verified: YES**
 
 **Deterministic FIND verification (if available):**
-If `${OUTPUT_DIR}/verified-suggestions.json` exists, read it. This file contains mechanical verification results — each FIND block was checked against the actual doc file by Python (not LLM). Skip any suggestion whose FIND block has `status: "FAIL"` (the text no longer matches the doc).
+If `${OUTPUT_DIR}/verified-suggestions.json` exists, read it. Skip any suggestion whose FIND block has `status: "FAIL"`.
 
-Apply all CONFIDENT + Verified: YES suggestions that pass deterministic verification. Include REVIEW-confidence and Verified: NO suggestions in the PR description under "Needs Manual Review" (not applied).
+**Deterministic REPLACE verification (if available):**
+If `${OUTPUT_DIR}/replace-verification.json` exists, read it. For each suggestion:
+- `gate: "BLOCK"` — do NOT apply. Include in PR description under "Blocked (value mismatch)" with the mismatch reason from the `values` array.
+- `gate: "REVIEW"` — do NOT auto-apply. Include in PR description under "Needs Manual Review" with note: "Values could not be verified against source code."
+- `gate: "AUTO_APPLY"` — apply as normal.
+
+Apply only suggestions that are CONFIDENT + Verified: YES + pass FIND verification + gate is AUTO_APPLY (or no replace-verification.json exists). Include all other suggestions in the PR description for manual review.
 
 If no suggestions can be applied AND there are no non-applied suggestions to report, stop. Do not create a branch or PR.
 
