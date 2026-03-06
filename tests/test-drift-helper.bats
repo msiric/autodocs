@@ -591,3 +591,134 @@ EOF
   actionable=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['actionable_alerts']))")
   [ "$actionable" = "0" ]
 }
+
+# ============================================================
+# REPLACE value verification
+# ============================================================
+
+@test "verify-replaces marks EVIDENCED when value found in source" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'export function createUser() { role: data.role ?? "member" }' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+**Confidence:** CONFIDENT
+
+### REPLACE WITH:
+> Default role is \`member\`
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  [ -f "$TEST_DIR/replace-verification.json" ]
+  gate=$(python3 -c "import json;d=json.load(open('$TEST_DIR/replace-verification.json'));print(d[0]['gate'])")
+  [ "$gate" = "AUTO_APPLY" ]
+}
+
+@test "verify-replaces marks MISMATCH when code reference not in source" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'export function createUser() { role: data.role ?? "member" }' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+**Confidence:** CONFIDENT
+
+### REPLACE WITH:
+> Default role is \`viewer\`
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  gate=$(python3 -c "import json;d=json.load(open('$TEST_DIR/replace-verification.json'));print(d[0]['gate'])")
+  [ "$gate" = "BLOCK" ]
+}
+
+@test "verify-replaces treats quoted prose as UNVERIFIED not MISMATCH" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'export function createUser() {}' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+**Confidence:** CONFIDENT
+
+### REPLACE WITH:
+> The endpoint 'returns a paginated list' of users
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  gate=$(python3 -c "import json;d=json.load(open('$TEST_DIR/replace-verification.json'));print(d[0]['gate'])")
+  # Prose quotes are UNVERIFIED (not MISMATCH), no code refs → REVIEW
+  [ "$gate" = "REVIEW" ]
+}
+
+@test "verify-replaces treats quoted code-like values as MISMATCH" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'export function createUser() { role: "member" }' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+**Confidence:** CONFIDENT
+
+### REPLACE WITH:
+> Default role is 'viewer'
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  gate=$(python3 -c "import json;d=json.load(open('$TEST_DIR/replace-verification.json'));print(d[0]['gate'])")
+  [ "$gate" = "BLOCK" ]
+}
+
+@test "verify-replaces returns REVIEW when no values extractable" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'export function foo() {}' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+**Confidence:** CONFIDENT
+
+### REPLACE WITH:
+> The API has been updated with new features.
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  gate=$(python3 -c "import json;d=json.load(open('$TEST_DIR/replace-verification.json'));print(d[0]['gate'])")
+  [ "$gate" = "REVIEW" ]
+}
+
+@test "verify-replaces handles missing source-context gracefully" {
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+
+### REPLACE WITH:
+> Some content
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  # No source-context → no verification file written (graceful skip)
+  [ ! -f "$TEST_DIR/replace-verification.json" ]
+}
+
+@test "verify-replaces handles empty suggestions" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'code' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+---
+date: 2026-03-05
+suggestion_count: 0
+---
+No suggestions.
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  [ -f "$TEST_DIR/replace-verification.json" ]
+}
+
+@test "verify-replaces mixed values produce correct gate" {
+  mkdir -p "$TEST_DIR/source-context"
+  echo 'export function listUsers() { return PaginatedResponse }' > "$TEST_DIR/source-context/users.ts"
+  cat > "$TEST_DIR/drift-suggestions.md" <<EOF
+## architecture.md — API Endpoints
+**Confidence:** CONFIDENT
+
+### REPLACE WITH:
+> \`listUsers\` returns \`PaginatedResponse\` with \`nonExistentType\`
+EOF
+
+  python3 "$HELPER" verify-replaces "$TEST_DIR"
+  gate=$(python3 -c "import json;d=json.load(open('$TEST_DIR/replace-verification.json'));print(d[0]['gate'])")
+  # nonExistentType is a backtick_id not in source → MISMATCH → BLOCK
+  [ "$gate" = "BLOCK" ]
+}

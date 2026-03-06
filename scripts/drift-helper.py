@@ -807,6 +807,19 @@ def verify_replaces(output_dir):
                         "values": verified,
                     })
 
+    # Process any pending REPLACE block at end of file
+    if in_replace and current_replace and current_doc:
+        replace_text = "\n".join(current_replace)
+        values = _extract_values(replace_text)
+        verified = _verify_values(values, combined_source, source_corpus)
+        gate = _gate_decision(verified)
+        results.append({
+            "doc": current_doc,
+            "section": current_section,
+            "gate": gate,
+            "values": verified,
+        })
+
     (output_dir / "replace-verification.json").write_text(
         json.dumps(results, indent=2) + "\n"
     )
@@ -852,11 +865,9 @@ def _verify_values(values, combined_source, source_corpus):
                 "source": found_in,
             })
         else:
-            # Check if it's a quoted literal that has a DIFFERENT value in the same context
-            # e.g., REPLACE says 'viewer' but source has 'member' in the same pattern
-            if v["type"] in ("single_quoted", "double_quoted"):
-                # Look for the value's key (what it's assigned to) in the REPLACE context
-                # This is a heuristic — if the value doesn't exist anywhere, it's likely wrong
+            # Determine severity: MISMATCH (block) vs UNVERIFIED (review)
+            # Only MISMATCH for values that look like code references
+            if _is_code_reference(val, v["type"]):
                 results.append({
                     "value": val,
                     "type": v["type"],
@@ -870,6 +881,34 @@ def _verify_values(values, combined_source, source_corpus):
                     "status": "UNVERIFIED",
                 })
     return results
+
+
+def _is_code_reference(value, value_type):
+    """Heuristic: does this value look like a code reference vs prose?
+
+    Code references (MISMATCH if not in source):
+    - backtick_id, file_path, error_code — always code references
+    - Quoted strings without spaces that look like identifiers: 'member', 'admin'
+    - Quoted strings with special chars: 'users:read', 'src/api'
+
+    Prose (UNVERIFIED if not in source):
+    - Quoted strings with spaces: 'the default role', 'returns a list'
+    - HTTP methods and endpoint paths are handled by their own types
+    """
+    # These types are always code references
+    if value_type in ("backtick_id", "file_path", "error_code"):
+        return True
+
+    # Quoted strings: code reference if no spaces and looks like an identifier
+    if value_type in ("single_quoted", "double_quoted"):
+        if " " in value:
+            return False  # Prose: "the user's role"
+        if re.match(r"^[a-zA-Z_][\w.:/-]*$", value):
+            return True  # Looks like identifier: 'member', 'users:read'
+        return False
+
+    # HTTP methods and endpoint paths — handled separately, not MISMATCH
+    return False
 
 
 def _gate_decision(verified_values):
