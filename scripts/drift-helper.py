@@ -83,7 +83,7 @@ def parse_report(report_path):
                 in_files = True
                 continue
 
-            # File entry: M src/auth/handler.ts
+            # File entry: M src/auth/handler.ts or R100 src/old.ts → src/new.ts
             if in_files:
                 file_match = re.match(r"\s+([MADR])\s+(.+)", line)
                 if file_match:
@@ -92,8 +92,8 @@ def parse_report(report_path):
                         "path": file_match.group(2).strip(),
                     })
                     continue
-                # Renamed file: R src/old.ts → src/new.ts
-                rename_match = re.match(r"\s+R\s+.+?→\s*(.+)", line)
+                # Renamed file with similarity: R100 src/old.ts → src/new.ts
+                rename_match = re.match(r"\s+R\d*\s+.+?→\s*(.+)", line)
                 if rename_match:
                     current_pr["files"].append({
                         "change_type": "R",
@@ -101,7 +101,7 @@ def parse_report(report_path):
                     })
                     continue
                 # Non-file line ends the files section
-                if not line.strip().startswith(("M ", "A ", "D ", "R ")):
+                if not line.strip().startswith(("M ", "A ", "D ", "R")):
                     in_files = False
 
     if current_pr:

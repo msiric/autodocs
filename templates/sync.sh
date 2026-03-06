@@ -307,6 +307,18 @@ else
 fi
 echo "$LOOKBACK_DATE" > "$OUTPUT_DIR/lookback-date.txt"
 
+# Pre-fetch PRs deterministically (GitHub only — other platforms use LLM tool calls)
+case "$PLATFORM" in
+  github)
+    if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
+      gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" --state merged \
+        --search "merged:>=$LOOKBACK_DATE" \
+        --json number,title,body,mergedAt,mergeCommit,files,author,reviews \
+        --limit 100 > "$OUTPUT_DIR/fetched-prs.json" 2>/dev/null || true
+    fi
+    ;;
+esac
+
 OUTPUT=$(retry claude -p "$(cat "$OUTPUT_DIR/sync-prompt.md")" \
   --add-dir "$OUTPUT_DIR" \
   --allowedTools "$SYNC_TOOLS" \

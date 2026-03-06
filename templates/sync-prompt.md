@@ -44,7 +44,9 @@ Check the `platform` field from config. Follow the instructions for your platfor
 
 ### If platform is "github":
 
-Use Bash to fetch merged PRs:
+**IMPORTANT — Pre-fetched PR data:** Read `${OUTPUT_DIR}/fetched-prs.json` FIRST. If this file exists and is non-empty, it already contains the merged PR data. Use it directly and SKIP the `gh pr list` command below entirely. Do NOT attempt to run `gh` if the pre-fetched file exists.
+
+Only if `fetched-prs.json` does not exist or is empty, use Bash to fetch merged PRs:
 ```
 gh pr list -R <github.owner>/<github.repo> --state merged \
   --search "merged:>=<date from lookback-date.txt>" \
@@ -52,7 +54,7 @@ gh pr list -R <github.owner>/<github.repo> --state merged \
   --limit 100
 ```
 
-This returns ALL data in one call. For each PR in the JSON array:
+For each PR in the JSON array (whether from pre-fetch or your own query):
 - `number` — PR number
 - `title` — PR title
 - `body` — PR description (if longer than 500 chars, truncate with "...")
