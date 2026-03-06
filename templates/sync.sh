@@ -491,8 +491,10 @@ EOF
 # Only advance timestamp if we processed relevant PRs or there were no PRs
 # This prevents "all classified NO → timestamp advances → PRs lost forever"
 if [ "$SYNC_STATUS" = "success" ]; then
-  RELEVANT_COUNT=$(grep -cE "YES|MAYBE" "$OUTPUT_DIR/daily-report.md" 2>/dev/null || echo 0)
-  PR_COUNT_VAL=$(grep "^pr_count:" "$OUTPUT_DIR/daily-report.md" 2>/dev/null | awk '{print $2}' || echo 0)
+  RELEVANT_COUNT=$(grep -cE "YES|MAYBE" "$OUTPUT_DIR/daily-report.md" 2>/dev/null || true)
+  [ -z "$RELEVANT_COUNT" ] && RELEVANT_COUNT=0
+  PR_COUNT_VAL=$(grep "^pr_count:" "$OUTPUT_DIR/daily-report.md" 2>/dev/null | awk '{print $2}')
+  [ -z "$PR_COUNT_VAL" ] && PR_COUNT_VAL=0
   if [ "$RELEVANT_COUNT" -gt 0 ] || [ "${PR_COUNT_VAL:-0}" -eq 0 ]; then
     date -u +"%Y-%m-%dT%H:%M:%SZ" > "$OUTPUT_DIR/last-successful-run"
   else
