@@ -244,3 +244,106 @@ No drift.
   [ "$(read_status apply)" = "dry-run" ]
   grep -q "DRY RUN" "$TEST_DIR/output/sync.log"
 }
+
+# ============================================================
+# Date computation + lookback
+# ============================================================
+
+@test "current-date.txt and lookback-date.txt are written before sync" {
+  create_sync_fixtures
+  create_scenario drift 0
+  add_fixture drift drift-report.md "---
+date: 2026-03-05
+drift_alert_count: 0
+---
+No drift.
+"
+
+  run run_sync
+  [ -f "$TEST_DIR/output/current-date.txt" ]
+  [ -f "$TEST_DIR/output/lookback-date.txt" ]
+  # Current date should be today
+  today=$(date -u +"%Y-%m-%d")
+  [ "$(cat "$TEST_DIR/output/current-date.txt")" = "$today" ]
+}
+
+@test "last-successful-run written on success with relevant PRs" {
+  create_sync_fixtures
+  create_scenario drift 0
+  add_fixture drift drift-report.md "---
+date: 2026-03-05
+drift_alert_count: 0
+---
+No drift.
+"
+
+  run run_sync
+  [ -f "$TEST_DIR/output/last-successful-run" ]
+}
+
+# ============================================================
+# Source context + match rate
+# ============================================================
+
+@test "source-context directory created during suggest phase" {
+  create_sync_fixtures
+  create_drift_fixtures
+  create_suggest_fixtures
+
+  run run_sync
+  [ -d "$TEST_DIR/output/source-context" ]
+}
+
+@test "match rate logged to metrics" {
+  create_sync_fixtures
+  create_scenario drift 0
+  add_fixture drift drift-report.md "---
+date: 2026-03-05
+drift_alert_count: 0
+---
+No drift.
+"
+
+  run run_sync
+  [ -f "$TEST_DIR/output/metrics.jsonl" ]
+  grep -q "match-rate" "$TEST_DIR/output/metrics.jsonl"
+}
+
+# ============================================================
+# Metrics logging
+# ============================================================
+
+@test "metrics logged for each pipeline stage" {
+  create_sync_fixtures
+  create_drift_fixtures
+  create_suggest_fixtures
+
+  run run_sync
+  grep -q '"call":"sync"' "$TEST_DIR/output/metrics.jsonl"
+  grep -q '"call":"drift"' "$TEST_DIR/output/metrics.jsonl"
+  grep -q '"call":"suggest"' "$TEST_DIR/output/metrics.jsonl"
+}
+
+# ============================================================
+# Open PR limit
+# ============================================================
+
+@test "open PR limit skips sync when too many PRs" {
+  # Create feedback with many open PRs
+  mkdir -p "$TEST_DIR/output/feedback"
+  python3 -c "
+import json
+prs = [{'pr_number': i, 'state': 'open', 'platform': 'github', 'date': '2026-03-01', 'suggestions': []} for i in range(1, 15)]
+json.dump(prs, open('$TEST_DIR/output/feedback/open-prs.json', 'w'))
+"
+  # Set limit low
+  echo "limits:" >> "$TEST_DIR/output/config.yaml"
+  echo "  max_open_prs: 5" >> "$TEST_DIR/output/config.yaml"
+
+  create_scenario sync 0
+
+  run run_sync
+  [ "$status" -eq 0 ]
+  grep -q "open PR limit" "$TEST_DIR/output/sync-status.md"
+  grep -q "skipped" "$TEST_DIR/output/sync-status.md"
+}

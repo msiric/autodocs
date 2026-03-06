@@ -163,8 +163,9 @@ if command -v python3 >/dev/null 2>&1 && [ -f "$FEEDBACK_HELPER" ]; then
         discovered=$(gh pr list -R "$FB_GH_OWNER/$FB_GH_REPO" \
           --search "head:autodocs/ is:open" \
           --json number,createdAt --limit 50 2>/dev/null || true)
-        [ -n "$discovered" ] && [ "$discovered" != "[]" ] && \
-          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" discover "$discovered" github 2>/dev/null
+        if [ -n "$discovered" ] && [ "$discovered" != "[]" ]; then
+          python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" discover "$discovered" github 2>/dev/null || true
+        fi
       fi
       ;;
   esac
@@ -180,8 +181,9 @@ if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
         pr_state=""
         case "$PLATFORM" in
           github)
-            [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ] && \
-              pr_state=$(gh pr view "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" --json state --jq '.state' 2>/dev/null)
+            if [ -n "$FB_GH_OWNER" ] && [ -n "$FB_GH_REPO" ]; then
+              pr_state=$(gh pr view "$pr_num" -R "$FB_GH_OWNER/$FB_GH_REPO" --json state --jq '.state' 2>/dev/null || true)
+            fi
             ;;
           gitlab)
             if [ -n "$FB_GL_PROJECT" ] && command -v glab >/dev/null 2>&1; then
@@ -283,7 +285,8 @@ fi
 MAX_OPEN=$(read_config limits.max_open_prs || true)
 [ -z "$MAX_OPEN" ] && MAX_OPEN=10
 if [ -f "$FEEDBACK_FILE" ] && command -v python3 >/dev/null 2>&1; then
-  OPEN_COUNT=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null | wc -l | tr -d ' ')
+  OPEN_COUNT=$(python3 "$FEEDBACK_HELPER" "$FEEDBACK_FILE" list-prs --open-only 2>/dev/null | wc -l | tr -d ' ' || true)
+  [ -z "$OPEN_COUNT" ] && OPEN_COUNT=0
   if [ "$OPEN_COUNT" -ge "$MAX_OPEN" ]; then
     echo "[$TIMESTAMP] SKIPPED — $OPEN_COUNT open PRs (limit: $MAX_OPEN). Review existing PRs first." >> "$LOG_FILE"
     log_metric "sync" "skipped-open-limit" "0"

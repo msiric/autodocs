@@ -203,22 +203,28 @@ The [examples/channel-pages/](examples/channel-pages/) directory contains a comp
 
 Alerts are grouped by section (not per-file), deduplicated across days, and auto-expire if unresolved.
 
-### Suggested updates + auto-PR
+### Suggested updates + verification + auto-PR
 
-When drift is detected, autodocs reads the flagged doc section and the PR changes, then generates:
-- **FIND/REPLACE diffs** — exact text from the doc (verified with line numbers) and the replacement
-- **INSERT AFTER operations** — for adding new content (table rows, paragraphs)
-- **Self-verification** — each FIND block is confirmed to exist verbatim in the doc
+When drift is detected, autodocs reads the flagged doc section, the PR diffs, and the **current source files** (ground truth), then generates suggestions that go through a multi-layer verification pipeline:
+
+1. **LLM generates FIND/REPLACE** — with self-verification (FIND text confirmed verbatim in doc)
+2. **Deterministic FIND verification** (Python) — mechanically confirms every FIND block exists in the target doc file
+3. **Deterministic REPLACE verification** (Python) — extracts code references from REPLACE text (backtick identifiers, quoted literals, file paths, error codes) and verifies them against source code:
+   - **EVIDENCED** — value found in source → eligible for auto-apply
+   - **MISMATCH** — value contradicts source → blocked (prevents wrong edits)
+   - **UNVERIFIED** — value can't be checked (behavioral claim) → flagged for human review
+4. **Auto-PR** — only CONFIDENT + FIND-verified + REPLACE-verified suggestions are applied. Everything else goes in the PR description for manual review.
+
+Each suggestion also includes:
 - **Confidence rating** — CONFIDENT for clear factual changes, REVIEW for ambiguous ones
-- **Changelog entry** — what changed, why (from PR description), and reviewer context (from PR threads)
-
-If `multi_model` is enabled, autodocs runs the suggest prompt a second time with a variant reasoning path (chain-of-thought variation). Only suggestions where both runs agree on the factual claims are applied via auto-PR. Disputed suggestions stay in drift-suggestions.md for manual review.
+- **Changelog entry** — what changed, why (from PR description), and reviewer context
+- **Source file context** — the LLM reads actual source files, not just diffs, preventing stale changelog entries from poisoning suggestions
 
 If `auto_pr` is enabled in config, autodocs automatically:
-1. Compares primary and verify suggestions (if multi-model enabled)
-2. Applies AGREED (or all CONFIDENT+VERIFIED if single-model) suggestions to doc files
-3. Includes the changelog alongside the edits
-4. Creates a branch and opens a PR in ADO (with work item linking)
+1. Applies verified suggestions to doc files in the repo
+2. Includes the changelog alongside the edits
+3. Creates a branch and opens a PR with the `autodocs` label
+4. The human reviews and merges — standard code review workflow
 5. The human reviews and merges — standard code review workflow
 
 ### Structural scan
@@ -243,8 +249,8 @@ Once a week, autodocs audits your docs against the actual repo:
 - **Kusto queries are predefined.** The LLM copies queries verbatim from config — it never generates KQL.
 - **Write sandbox.** Each prompt can only write to its specific output files. The apply prompt can additionally write to doc files in the repo (gated by `auto_pr` config).
 - **Git operations scoped.** Read operations: `git diff-tree`, `git ls-files`, `git fetch`. Write operations (Call 4 only): `git checkout -b`, `git add`, `git commit`, `git push` — always to a feature branch, never to the target branch.
-- **Self-verified suggestions.** Each FIND block is confirmed to exist verbatim in the doc before being applied. Unverified suggestions are skipped.
-- **Multi-model verification.** When enabled, suggestions are independently generated through two different reasoning paths. Only suggestions where both agree are auto-applied. Disputed suggestions require manual review.
+- **Three-layer verification.** (1) FIND text confirmed verbatim in doc by Python. (2) REPLACE text values verified against source code by Python — mismatched values are blocked. (3) Source files included in LLM context as ground truth. Unverified or mismatched suggestions are flagged for human review, never auto-applied.
+- **Prompt injection mitigation.** PR descriptions and review comments are marked as untrusted user data in all prompts.
 - **Human reviews all changes.** Auto-PRs go through standard code review workflow. Branch protection rules apply.
 
 ## Best practices for optimal results
