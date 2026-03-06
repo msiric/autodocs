@@ -189,6 +189,77 @@ def execute_stale_action(platform, repo_id, pr_number, action, reason):
             _gh(["pr", "close", str(pr_number)], repo_id)
 
 
+def _detect_stale_prs(feedback, config, repo_dir, today_str, stale_labels):
+    """Detect stale PRs. Returns list of 'pr_num|action|reason' strings."""
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    stale_config = config.get("stale_pr", {})
+    warn_days = stale_config.get("warn_after_days", 14)
+    close_days = stale_config.get("close_after_days", 21)
+    max_actions = stale_config.get("max_actions_per_run", 5)
+
+    open_prs = [pr for pr in feedback if pr.get("state") == "open"]
+    results = []
+
+    # Build doc paths for expired-find check
+    doc_paths = {}
+    for doc in config.get("docs") or []:
+        if doc.get("repo_path"):
+            doc_paths[doc["name"]] = Path(repo_dir) / doc["repo_path"]
+
+    for pr in open_prs:
+        if len(results) >= max_actions:
+            break
+
+        pr_num = pr.get("pr_number")
+        pr_date_str = pr.get("date", "")
+        if not pr_date_str:
+            continue
+        try:
+            pr_date = datetime.strptime(pr_date_str, "%Y-%m-%d")
+        except ValueError:
+            continue
+        age_days = (today - pr_date).days
+
+        # SUPERSEDED: all sections covered by a newer PR
+        sections = {(s.get("doc", ""), s.get("section", ""))
+                    for s in pr.get("suggestions", []) if s.get("doc") and s.get("section")}
+        if sections:
+            for other in open_prs:
+                if other.get("pr_number") == pr_num or other.get("date", "") <= pr_date_str:
+                    continue
+                other_sections = {(s.get("doc", ""), s.get("section", ""))
+                                  for s in other.get("suggestions", []) if s.get("doc") and s.get("section")}
+                if sections <= other_sections:
+                    results.append(f"{pr_num}|close|Superseded by PR #{other['pr_number']}")
+                    break
+            else:
+                pass  # Not superseded, check other conditions below
+            if any(f"{pr_num}|close" in r for r in results):
+                continue
+
+        # EXPIRED_FIND: all find_text entries don't match doc
+        find_texts = [s for s in pr.get("suggestions", []) if s.get("find_text")]
+        if find_texts:
+            all_expired = True
+            for s in find_texts:
+                doc_path = doc_paths.get(s.get("doc", ""))
+                if doc_path and doc_path.exists() and s["find_text"] in doc_path.read_text():
+                    all_expired = False
+                    break
+            if all_expired:
+                results.append(f"{pr_num}|close|All FIND texts no longer match doc on main")
+                continue
+
+        # AGE: two-phase warn/close
+        has_stale_label = stale_labels.get(str(pr_num), False)
+        if age_days >= close_days and has_stale_label:
+            results.append(f"{pr_num}|close|Open for {age_days} days with no activity after warning")
+        elif age_days >= warn_days and not has_stale_label:
+            results.append(f"{pr_num}|warn|Open for {age_days} days with no activity")
+
+    return results
+
+
 def get_stale_labels(platform, repo_id):
     """Get PR numbers that have the autodocs:stale label."""
     labels = {}
@@ -293,23 +364,8 @@ def pre_sync(output_dir, repo_dir, platform):
     max_actions = stale_config.get("max_actions_per_run", 5)
     stale_labels = get_stale_labels(platform, repo_id)
 
-    # Import stale detection logic from sibling script
-    stale_helper_path = Path(__file__).parent / "stale-helper.py"
-    stale_results = []
-    if stale_helper_path.exists():
-        try:
-            result = subprocess.run(
-                ["python3", str(stale_helper_path),
-                 str(output_dir / "feedback" / "open-prs.json"),
-                 str(output_dir / "config.yaml"),
-                 str(repo_dir),
-                 "list-stale", today_str, json.dumps(stale_labels)],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                stale_results = result.stdout.strip().splitlines()
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+    # Inline stale detection (avoids subprocess hack with stale-helper.py)
+    stale_results = _detect_stale_prs(feedback, config, str(repo_dir), today_str, stale_labels)
 
     for line in stale_results[:max_actions]:
         parts = line.split("|")

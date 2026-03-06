@@ -223,6 +223,40 @@ Date when the config was last reviewed for accuracy. Informational only.
 last_verified: "2026-03-01"
 ```
 
+### `limits`
+
+Controls to prevent runaway costs and PR accumulation.
+
+```yaml
+limits:
+  max_prs_per_run: 20       # Process at most N PRs per sync (default: 20)
+  max_open_prs: 10          # Skip sync if N+ autodocs PRs are open (default: 10)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `max_prs_per_run` | 20 | Maximum merged PRs to process per sync. If more exist in the lookback window, the most recent N are processed. |
+| `max_open_prs` | 10 | If this many autodocs PRs are open, the sync is skipped entirely. Forces the team to review existing PRs before generating more. |
+
+### `stale_pr`
+
+Automatically warns about and closes outdated autodocs PRs.
+
+```yaml
+stale_pr:
+  warn_after_days: 14       # Comment + label at N days (default: 14)
+  close_after_days: 21      # Close if no activity N days after warning (default: 21)
+  max_actions_per_run: 5    # Limit stale actions per run (default: 5)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `warn_after_days` | 14 | After N days with no merge, add `autodocs:stale` label and post a warning comment. |
+| `close_after_days` | 21 | After N days with no merge AND no human activity since warning, auto-close the PR. |
+| `max_actions_per_run` | 5 | Maximum warn/close actions per run to prevent notification storms. |
+
+PRs with the `autodocs:keep-open` label are never warned or closed. PRs whose FIND text no longer matches the doc (EXPIRED_FIND) or that are fully superseded by a newer PR are closed immediately without warning.
+
 ## Output Files
 
 autodocs generates these files in the output directory:

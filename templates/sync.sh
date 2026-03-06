@@ -280,16 +280,18 @@ if [ $SYNC_RC -eq 0 ] && [ -f "$OUTPUT_DIR/daily-report.md" ]; then
         echo "[$TIMESTAMP] SUGGEST WARNING: some suggestions are UNVERIFIED" >> "$LOG_FILE"
       fi
 
-      # Deterministic FIND verification (Python, not LLM)
-      # Mechanically checks every FIND block exists in the target doc file
-      if [ -f "$DRIFT_HELPER" ] && command -v python3 >/dev/null 2>&1; then
-        python3 "$DRIFT_HELPER" verify-finds "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
+      # Deterministic verification (Python, not LLM)
+      VERIFY_HELPER="$SCRIPTS_DIR/verify-helper.py"
+
+      # FIND verification: does the target text exist in the doc?
+      if [ -f "$VERIFY_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$VERIFY_HELPER" verify-finds "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
           echo "[$TIMESTAMP] FIND VERIFY: some FIND blocks failed verification" >> "$LOG_FILE"
       fi
 
-      # Deterministic REPLACE verification (checks output values against source code)
-      if [ -f "$DRIFT_HELPER" ] && [ -d "$OUTPUT_DIR/source-context" ] && command -v python3 >/dev/null 2>&1; then
-        python3 "$DRIFT_HELPER" verify-replaces "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
+      # REPLACE verification: are code references correct?
+      if [ -f "$VERIFY_HELPER" ] && [ -d "$OUTPUT_DIR/source-context" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$VERIFY_HELPER" verify-replaces "$OUTPUT_DIR" "$REPO_DIR" 2>/dev/null || \
           echo "[$TIMESTAMP] REPLACE VERIFY: some suggestions BLOCKED (value mismatch)" >> "$LOG_FILE"
       fi
 
