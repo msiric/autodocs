@@ -2,74 +2,68 @@
 
 ## Overview
 
-autodocs runs as up to five sequential Claude Code headless calls daily (sync, drift, suggest, verify, apply), plus a weekly structural scan. Each call is independent — downstream failures can't corrupt upstream output.
+autodocs runs up to 4 sequential Claude Code headless calls daily, with deterministic Python pre/post-processing between each call. A weekly structural scan runs separately. Each call is independent — downstream failures can't corrupt upstream output.
+
+The pipeline alternates between deterministic code (Python/bash — reliable, testable) and LLM calls (Claude — for natural language understanding and generation). Every LLM output that affects documentation edits is verified by Python before being applied.
 
 ```
-launchd/cron (daily)
+launchd/cron/GitHub Actions (daily)
     |
     v
 autodocs-sync.sh
     |
-    ├── git fetch origin (ensure merge commits are available)
+    ├── Lock, auth check, git fetch
+    ├── Compute current-date.txt + lookback-date.txt (bash, deterministic)
+    ├── Pre-fetch merged PRs (bash, platform CLI)
+    ├── Feedback: discover autodocs PRs, check state, detect corrections
+    ├── Stale PR management (Python: warn/close old PRs)
+    ├── Open PR limit check
     |
-    ├── Auth check (claude -p "Reply OK")
-    |   └── Fails? → Write sync-status.md "failed", exit
-    |
-    ├── Call 1: Sync Prompt
-    |   ├── Read config.yaml
-    |   ├── ADO MCP: list completed PRs
-    |   ├── ADO MCP: get PR details (merge commit SHA, description)
-    |   ├── ADO MCP: get PR review threads (for relevant PRs)
-    |   ├── git diff-tree: get changed files per PR
-    |   ├── Classify PRs by path matching
-    |   ├── Extract owner's activity
-    |   ├── Kusto MCP: run predefined queries (if configured)
-    |   ├── Compare errors against known patterns (if configured)
+    ├── Call 1: Sync (LLM)
+    |   ├── Read pre-fetched PRs from fetched-prs.json
+    |   ├── Get changed files via git diff-tree
+    |   ├── Full diffs for mapped files, stat-only for unmapped
     |   └── Write: daily-report.md, activity-log.md
     |
-    ├── Call 2: Drift Prompt (only if Call 1 succeeded)
-    |   ├── Read daily-report.md (Call 1 output)
-    |   ├── Read config.yaml (package_map, docs)
-    |   ├── Read reference docs (Table of Contents, structure)
-    |   ├── Read drift-status.md (active alerts)
-    |   ├── Map changed packages → doc sections
-    |   ├── Detect unmapped packages (CRITICAL)
-    |   ├── Detect new telemetry patterns (HIGH)
-    |   ├── Deduplicate against existing alerts
-    |   ├── Auto-expire stale LOW alerts
+    ├── match-helper.py      (Python: file → section mapping)
+    ├── drift-helper.py      (Python: parse, group, dedup, lifecycle)
+    ├── Log match rate metric
+    |
+    ├── Call 2: Drift (LLM)
+    |   ├── Read drift-context.json (pre-processed)
     |   └── Write: drift-report.md, drift-status.md, drift-log.md
     |
-    ├── Call 3: Suggest Prompt (only if unchecked HIGH/CRITICAL alerts exist)
-    |   ├── Read drift-status.md (unchecked HIGH/CRITICAL alerts)
-    |   ├── Read flagged sections from reference docs
-    |   ├── Read PR details from daily-report.md (description, files, threads)
-    |   ├── Generate FIND/REPLACE suggestions (self-verified against doc)
-    |   ├── Generate changelog entries (what changed + why)
-    |   └── Write: drift-suggestions.md, changelog-<doc>.md
+    ├── drift-helper.py suggest-dedup  (Python: changelog + open PR filtering)
+    ├── Copy mapped source files to source-context/ (bash)
     |
-    ├── Call 3v: Verify Prompt (optional, if multi_model enabled + CONFIDENT suggestions)
-    |   ├── Same suggest prompt with chain-of-thought variation
-    |   ├── Independent reasoning path (re-read section, list key facts first)
-    |   ├── No changelog writing (suggestions only)
-    |   └── Write: drift-suggestions-verify.md
+    ├── Call 3: Suggest (LLM)
+    |   ├── Read suggest-context.json + source files (ground truth)
+    |   ├── Generate FIND/REPLACE with self-verification
+    |   └── Write: drift-suggestions.md, changelog-*.md
     |
-    ├── Call 4: Apply Prompt (optional, if auto_pr enabled + AGREED suggestions)
-    |   ├── Read drift-suggestions.md (filter CONFIDENT + Verified: YES)
-    |   ├── Apply FIND/REPLACE and INSERT AFTER to doc files in repo
-    |   ├── Copy changelog files to repo docs directory
+    ├── drift-helper.py verify-finds    (Python: FIND text exists in doc?)
+    ├── drift-helper.py verify-replaces (Python: REPLACE values in source?)
+    |   └── Three-tier gating: EVIDENCED → apply, MISMATCH → block, UNVERIFIED → review
+    |
+    ├── Shadow verify (optional, LLM, log-only — does not gate apply)
+    |
+    ├── Call 4: Apply (LLM, optional — if auto_pr enabled + verified suggestions)
+    |   ├── Read verification results (verified-suggestions.json, replace-verification.json)
+    |   ├── Apply only CONFIDENT + FIND-verified + REPLACE-verified suggestions
     |   ├── git: create branch, commit, push
-    |   └── ADO MCP: create pull request (with work item link)
+    |   └── Platform: create PR with autodocs label + metadata
     |
-    └── Write sync-status.md (status + drift + suggest + apply)
+    ├── Write sync-status.md + metrics.jsonl
+    └── Advance last-successful-run (only if relevant PRs processed)
 
-launchd/cron (weekly, Saturday)
+launchd/cron/GitHub Actions (weekly, Saturday)
     |
     v
 autodocs-structural-scan.sh
     |
     ├── Read reference docs, extract all file paths
-    ├── git ls-files: verify each file exists
-    ├── git ls-files: find undocumented files in feature paths
+    ├── git ls-files: verify each exists, find undocumented files
+    ├── Suggest package_map additions
     └── Write: structural-report.md
 ```
 
@@ -111,21 +105,20 @@ Each prompt runs as a separate Claude Code invocation with its own allowlist:
 
 | Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest | Call 3v: Verify | Call 4: Apply |
 |----------|-------------|---------------|-----------------|-----------------|---------------|
-| Purpose | Fetch data from ADO/Kusto | Detect stale doc sections | Generate FIND/REPLACE suggestions | Independent verification | Apply edits + open PR |
-| Inputs | config.yaml, ADO, Kusto, git | daily-report.md, config.yaml, docs | drift-status.md, daily-report.md, docs | Same as Call 3 (variant reasoning) | drift-suggestions.md + verify.md, doc files |
-| Outputs | daily-report.md, activity-log.md | drift-report.md, drift-status.md, drift-log.md | drift-suggestions.md, changelog-*.md | drift-suggestions-verify.md | git branch + ADO PR |
-| Allowed tools | 5 ADO MCP + Kusto MCP + Bash(git) + Write | Read + Write | Read + Write | Read + Write | Read + Edit + Write + Bash(git) + 2 ADO write tools |
-| Runs when | Always | Call 1 succeeded | Unchecked HIGH/CRITICAL alerts | multi_model enabled + CONFIDENT suggestions | auto_pr enabled + AGREED suggestions |
-| Failure impact | sync-status.md = "failed" | Logged, sync preserved | Logged, drift preserved | Logged, falls back to single-model | Logged, suggestions preserved |
+| Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest | Call 4: Apply |
+|----------|-------------|---------------|-----------------|---------------|
+| Purpose | Fetch PR data | Detect stale sections | Generate FIND/REPLACE | Apply edits + open PR |
+| Inputs | fetched-prs.json, config | drift-context.json, docs | suggest-context.json, source-context/, docs | drift-suggestions.md, verification JSONs |
+| Outputs | daily-report.md | drift-report/status/log.md | drift-suggestions.md, changelog | git branch + PR |
+| Runs when | Always | Call 1 succeeded | HIGH/CRITICAL alerts | auto_pr + verified suggestions |
+| Deterministic pre-processing | Pre-fetch PRs, date computation | match-helper, drift-helper pre-process | suggest-dedup, source copy | verify-finds, verify-replaces |
 
-This means:
-- Each prompt can fail without corrupting the others
-- Each can be debugged independently
-- Token budgets are independent (~35K sync, ~10K drift, ~40K suggest, ~40K verify, ~15K apply)
-- Calls 3-4 only run when there's work to do (skipped on clean days)
-- Call 3v uses the same prompt as Call 3 with a chain-of-thought variation via `--append-system-prompt`
-- Call 4 compares primary and verify suggestions — only applies AGREED ones
-- Call 4 is the only call with write access to ADO (branch + PR creation)
+Key properties:
+- Each call can fail without corrupting the others
+- Deterministic Python runs between every call — the LLM never sees unverified data
+- Call 3 reads actual source files (source-context/) as ground truth
+- Call 4 only applies suggestions that pass both FIND and REPLACE verification
+- Shadow verify (Call 3v) runs optionally in a subshell — logs only, never gates apply
 
 The weekly structural scan runs as a completely separate job with its own wrapper and schedule.
 
