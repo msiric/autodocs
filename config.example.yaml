@@ -1,0 +1,199 @@
+# autodocs Configuration
+#
+# This file defines everything specific to your team, repo, and docs.
+# The sync and drift prompts read this at runtime.
+#
+# After editing, no need to re-run setup — changes take effect on the next sync.
+# Only re-run setup.sh if you change OUTPUT_DIR or REPO_DIR (paths baked into prompts).
+
+# ---------------------------------------------------------------------------
+# Platform: "github", "ado", "gitlab", or "bitbucket"
+# ---------------------------------------------------------------------------
+platform: github
+
+# Feature/area name — used as the classification label in reports
+# (e.g., "Channel Pages: YES", "Auth: MAYBE")
+feature_name: "My Feature"
+
+# ---------------------------------------------------------------------------
+# GitHub connection (when platform: github)
+# ---------------------------------------------------------------------------
+github:
+  owner: your-username               # GitHub user or organization
+  repo: your-repo                    # Repository name
+
+# ---------------------------------------------------------------------------
+# GitLab connection (when platform: gitlab)
+# ---------------------------------------------------------------------------
+# gitlab:
+#   host: "gitlab.com"               # or self-hosted: "gitlab.mycompany.com"
+#   project_path: "group/repo"       # full project path (e.g., "myteam/myapp")
+
+# ---------------------------------------------------------------------------
+# Bitbucket connection (when platform: bitbucket)
+# Auth: set BITBUCKET_TOKEN environment variable
+# ---------------------------------------------------------------------------
+# bitbucket:
+#   workspace: "my-workspace"
+#   repo: "my-repo"
+
+# ---------------------------------------------------------------------------
+# Azure DevOps connection (when platform: ado)
+# ---------------------------------------------------------------------------
+# ado:
+#   org: your-org                    # ADO organization name
+#   project: your-project            # ADO project name
+#   repo: your-repo-name             # Repository name (for display)
+#   repo_id: "00000000-..."          # Repository GUID (setup.sh resolves this)
+
+# ---------------------------------------------------------------------------
+# Feature owner — gets a dedicated "Activity" section in daily reports
+# Use github_username (GitHub) or ado_id (ADO) for PR author matching.
+# ---------------------------------------------------------------------------
+owner:
+  name: "Your Name"
+  email: "you@company.com"
+  github_username: "your-username"   # GitHub (author.login)
+  # gitlab_username: "your-username" # GitLab (author.username)
+  # bitbucket_username: "your-user"  # Bitbucket (author.nickname)
+  # ado_id: "00000000-..."           # ADO (GUID)
+
+# ---------------------------------------------------------------------------
+# Team members — PRs by these people are tracked
+# The owner is implicitly included; no need to list them again.
+# ---------------------------------------------------------------------------
+team_members:
+  - name: "Teammate One"
+    email: "teammate1@company.com"
+    github_username: "teammate1"     # GitHub
+    # gitlab_username: "teammate1"   # GitLab
+    # bitbucket_username: "teammate1" # Bitbucket
+    # ado_id: "00000000-..."         # ADO
+  - name: "Teammate Two"
+    email: "teammate2@company.com"
+    github_username: "teammate2"
+
+# ---------------------------------------------------------------------------
+# PR classification — which file paths indicate relevance to your feature
+# PRs with changed files matching these prefixes are classified as relevant.
+# ---------------------------------------------------------------------------
+relevant_paths:
+  - packages/your-feature/
+  - packages/components/your-feature-hooks/
+  # Add all package paths that belong to your feature area
+
+# Catch-all substring for files not covered by relevant_paths.
+# Matched as a case-insensitive substring against each file path (not glob).
+relevant_pattern: "your-feature"
+
+# ---------------------------------------------------------------------------
+# Exclude patterns (optional)
+# Files matching these patterns are skipped during diff analysis.
+# Added to the defaults (*.test.*, *.spec.*, dist/, build/, *.generated.*, lock files).
+# ---------------------------------------------------------------------------
+# exclude_patterns:
+#   - "test_*.py"          # Python tests
+#   - "*_test.go"          # Go tests
+#   - "target/"            # Java/Rust build output
+#   - "__pycache__/"       # Python bytecode
+
+# ---------------------------------------------------------------------------
+# Source roots (optional)
+# Directories where source code lives. Used to strip prefixes when extracting
+# package names from file paths. For src/auth/handler.ts with source_roots: ["src/"],
+# the extracted package is "auth" (not "src").
+# ---------------------------------------------------------------------------
+# source_roots:
+#   - "src/"               # TypeScript/Python
+#   - "cmd/"               # Go binaries
+#   - "packages/"          # Monorepo packages
+
+# ---------------------------------------------------------------------------
+# Telemetry via Kusto (optional, typically ADO only)
+# Remove this section entirely if you don't use Kusto.
+# ---------------------------------------------------------------------------
+# telemetry:
+#   enabled: true
+#   cluster: "your-cluster.region.kusto.windows.net"
+#   database: "your-database-id"
+#   queries:
+#     - name: "Overall reliability"
+#       query: |
+#         YourTable
+#         | where Timestamp > ago(24h)
+#         | summarize count() by Status
+
+# ---------------------------------------------------------------------------
+# Reference docs for drift detection (optional)
+# Remove this section to disable drift detection (only sync will run).
+#
+# Each doc needs:
+#   - name: filename (must exist in your output directory)
+#   - repo_path: (optional) path in git repo (for auto-PR)
+#   - package_map: maps package names to doc section names
+#   - known_patterns_section: (optional) section title with known error patterns
+#   - ignore_packages: (optional) shared packages to skip in unmapped detection
+# ---------------------------------------------------------------------------
+docs:
+  - name: "your-feature-guide.md"
+    repo_path: "docs/your-feature/your-feature-guide.md"
+    package_map:
+      your-feature: "Architecture"
+      your-feature-hooks: "Hooks Reference"
+      your-feature-modals: "User Flows"
+
+      your-shared-package:
+        default: "Shared Package (multiple sections)"
+        title_hints:
+          "error,fault,exception": "Error Handling"
+          "auth,token,login": "Authentication"
+          "config,flag,setting": "Configuration"
+
+    ignore_packages:
+      - i18n-resources
+      - test-utilities
+
+  - name: "your-telemetry-guide.md"
+    repo_path: "docs/your-feature/your-telemetry-guide.md"
+    known_patterns_section: "Known Failure Patterns"
+
+# ---------------------------------------------------------------------------
+# Auto-PR creation (optional)
+# Applies CONFIDENT + VERIFIED suggestions to docs in the repo and opens a PR.
+# Requires docs to be tracked in git (repo_path field on each doc entry).
+# ---------------------------------------------------------------------------
+# auto_pr:
+#   enabled: true
+#   target_branch: "main"              # GitHub default: "main", ADO default: "master"
+#   branch_prefix: "autodocs/"
+#   work_item_ids: "12345"             # ADO work item IDs (optional, ADO only)
+
+# ---------------------------------------------------------------------------
+# Multi-model verification (optional)
+# Runs the suggest prompt twice with different reasoning paths (same model).
+# Only suggestions where both runs agree are applied via auto-PR.
+# ---------------------------------------------------------------------------
+# multi_model:
+#   enabled: true
+
+# ---------------------------------------------------------------------------
+# Limits (optional)
+# Controls to prevent runaway costs and PR accumulation.
+# ---------------------------------------------------------------------------
+# limits:
+#   max_prs_per_run: 20       # Process at most N PRs per sync (default: 20)
+#   max_open_prs: 10          # Skip sync if N+ autodocs PRs are open (default: 10)
+
+# ---------------------------------------------------------------------------
+# Stale PR management (optional)
+# Automatically warns about and closes outdated autodocs PRs.
+# ---------------------------------------------------------------------------
+# stale_pr:
+#   warn_after_days: 14       # Comment + label at N days (default: 14)
+#   close_after_days: 21      # Close if no activity N days after warning (default: 21)
+#   max_actions_per_run: 5    # Limit closes per run (default: 5)
+
+# ---------------------------------------------------------------------------
+# Metadata
+# ---------------------------------------------------------------------------
+last_verified: "2026-01-01"
