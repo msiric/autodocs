@@ -3,10 +3,19 @@ set -euo pipefail
 
 # autodocs — automated documentation drift detection
 # https://github.com/msiric/autodocs
-# Usage: autodocs-sync.sh [--dry-run]
+# Usage: autodocs-sync.sh [--dry-run] [--since YYYY-MM-DD [--chunk-days N]]
 
 DRY_RUN=false
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
+SINCE_DATE=""
+CHUNK_DAYS=7
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)    DRY_RUN=true; shift ;;
+    --since)      SINCE_DATE="${2:-}"; shift 2 ;;
+    --chunk-days) CHUNK_DAYS="${2:-7}"; shift 2 ;;
+    *)            shift ;;
+  esac
+done
 
 OUTPUT_DIR="${OUTPUT_DIR}"
 REPO_DIR="${REPO_DIR}"
@@ -109,18 +118,6 @@ EOF
   exit 1
 fi
 
-# Clear intermediate files from any previous run (prevents stale data if a run crashed mid-pipeline).
-# Persistent state is preserved: drift-status.md, drift-log.md, activity-log.md,
-# changelog-*.md, feedback/, last-successful-run, metrics.jsonl, sync-status.md.
-for f in daily-report.md resolved-mappings.md drift-context.json drift-report.md \
-         suggest-context.json drift-suggestions.md drift-suggestions-verify.md \
-         verified-suggestions.json replace-verification.json pre-sync-result.json \
-         fetched-prs.json current-date.txt lookback-date.txt; do
-  rm -f "$OUTPUT_DIR/$f"
-done
-rm -rf "$OUTPUT_DIR/source-context"
-rm -f "$OUTPUT_DIR"/changelog-*.md.bak
-
 # Pre-flight: verify configured doc paths exist in repo
 CONFIG_HELPER="$SCRIPTS_DIR/config-helper.py"
 if [ -f "$CONFIG_HELPER" ] && command -v python3 >/dev/null 2>&1; then
@@ -137,14 +134,7 @@ fi
 cd "$REPO_DIR"
 git fetch origin --quiet 2>/dev/null || echo "[$TIMESTAMP] git fetch failed (non-fatal)" >> "$LOG_FILE"
 
-# Track results — status is written ONCE at the end
-SYNC_STATUS="failed"
-DRIFT_STATUS="skipped"
-SUGGEST_STATUS="skipped"
-VERIFY_STATUS="skipped"
-APPLY_STATUS="skipped"
-
-# Determine platform for tool allowlists
+# Determine platform for tool allowlists (once, used by all pipeline runs)
 PLATFORM=$(read_config platform || true)
 
 case "$PLATFORM" in
@@ -217,6 +207,31 @@ EOF
     fi
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# Pipeline function — runs one cycle of sync → drift → suggest → verify → apply.
+# Called once for normal mode, or once per chunk for --since catchup mode.
+# Uses global: OUTPUT_DIR, REPO_DIR, SCRIPTS_DIR, PLATFORM, SYNC_TOOLS,
+#              APPLY_BASE_TOOLS, DRY_RUN, LOG_FILE, STATUS_FILE, TIMESTAMP
+# ---------------------------------------------------------------------------
+run_pipeline() {
+
+# Reset per-run status
+SYNC_STATUS="failed"
+DRIFT_STATUS="skipped"
+SUGGEST_STATUS="skipped"
+VERIFY_STATUS="skipped"
+APPLY_STATUS="skipped"
+
+# Clear intermediate files (preserve persistent state)
+for f in daily-report.md resolved-mappings.md drift-context.json drift-report.md \
+         suggest-context.json drift-suggestions.md drift-suggestions-verify.md \
+         verified-suggestions.json replace-verification.json pre-sync-result.json \
+         fetched-prs.json current-date.txt lookback-date.txt; do
+  rm -f "$OUTPUT_DIR/$f"
+done
+rm -rf "$OUTPUT_DIR/source-context"
+rm -f "$OUTPUT_DIR"/changelog-*.md.bak
 
 # Call 1: Main sync (PRs + telemetry)
 # Compute lookback date deterministically (prevents LLM date anchoring on old reports)
@@ -469,4 +484,91 @@ if [ "$SYNC_STATUS" = "success" ] && [ "$DRIFT_STATUS" != "failed" ]; then
   else
     echo "[$TIMESTAMP] WARN: ${PR_COUNT_VAL} PRs found, 0 relevant. Timestamp not advanced." >> "$LOG_FILE"
   fi
+fi
+
+} # end run_pipeline
+
+# ---------------------------------------------------------------------------
+# Execution: normal mode or --since catchup mode
+# ---------------------------------------------------------------------------
+
+if [ -n "$SINCE_DATE" ]; then
+  # Catchup mode: process historical PRs in weekly chunks.
+  # Each chunk runs the full pipeline (Calls 1-3) in dry-run mode (skip apply).
+  # After all chunks, one final normal run creates the PR.
+
+  # Validate --since date
+  if ! date -u -j -f "%Y-%m-%d" "$SINCE_DATE" +"%Y-%m-%d" >/dev/null 2>&1 && \
+     ! date -u -d "$SINCE_DATE" +"%Y-%m-%d" >/dev/null 2>&1; then
+    echo "Error: invalid --since date '$SINCE_DATE'. Use YYYY-MM-DD format." >&2
+    exit 1
+  fi
+
+  TODAY=$(date -u +"%Y-%m-%d")
+  if [[ "$SINCE_DATE" > "$TODAY" ]]; then
+    echo "Error: --since date '$SINCE_DATE' is in the future." >&2
+    exit 1
+  fi
+
+  # Save original last-successful-run so we can detect already-processed chunks
+  ORIGINAL_LAST_RUN=""
+  if [ -f "$OUTPUT_DIR/last-successful-run" ]; then
+    ORIGINAL_LAST_RUN=$(cat "$OUTPUT_DIR/last-successful-run" | cut -c1-10)
+  fi
+
+  CHUNK_START="$SINCE_DATE"
+  CHUNK_NUM=0
+  TOTAL_CHUNKS=0
+
+  # Count total chunks for progress reporting
+  COUNT_DATE="$SINCE_DATE"
+  while [[ "$COUNT_DATE" < "$TODAY" ]]; do
+    TOTAL_CHUNKS=$((TOTAL_CHUNKS + 1))
+    COUNT_DATE=$(date -u -j -f "%Y-%m-%d" -v+${CHUNK_DAYS}d "$COUNT_DATE" +"%Y-%m-%d" 2>/dev/null || \
+                 date -u -d "$COUNT_DATE + $CHUNK_DAYS days" +"%Y-%m-%d")
+  done
+
+  echo "[$TIMESTAMP] CATCHUP: $TOTAL_CHUNKS chunks from $SINCE_DATE to $TODAY (${CHUNK_DAYS}-day windows)" >> "$LOG_FILE"
+
+  if [ "$DRY_RUN" = "true" ]; then
+    echo "=== autodocs catchup (dry-run) ==="
+    echo "Window: $SINCE_DATE to $TODAY"
+    echo "Chunks: $TOTAL_CHUNKS (${CHUNK_DAYS}-day windows)"
+    echo ""
+    echo "Estimated time: ~$((TOTAL_CHUNKS * 3)) minutes (${TOTAL_CHUNKS} chunks × ~3 min each)"
+    echo ""
+    echo "Run without --dry-run to execute."
+    exit 0
+  fi
+
+  while [[ "$CHUNK_START" < "$TODAY" ]]; do
+    CHUNK_NUM=$((CHUNK_NUM + 1))
+    CHUNK_END=$(date -u -j -f "%Y-%m-%d" -v+${CHUNK_DAYS}d "$CHUNK_START" +"%Y-%m-%d" 2>/dev/null || \
+                date -u -d "$CHUNK_START + $CHUNK_DAYS days" +"%Y-%m-%d")
+
+    # Resumability: skip chunks that were already processed
+    if [ -n "$ORIGINAL_LAST_RUN" ] && [[ "$CHUNK_END" < "$ORIGINAL_LAST_RUN" || "$CHUNK_END" == "$ORIGINAL_LAST_RUN" ]]; then
+      echo "[$TIMESTAMP] CATCHUP: chunk $CHUNK_NUM/$TOTAL_CHUNKS ($CHUNK_START to $CHUNK_END) — already processed, skipping" >> "$LOG_FILE"
+      CHUNK_START="$CHUNK_END"
+      continue
+    fi
+
+    echo "[$TIMESTAMP] CATCHUP: chunk $CHUNK_NUM/$TOTAL_CHUNKS ($CHUNK_START to $CHUNK_END)" >> "$LOG_FILE"
+
+    # Set lookback to this chunk's start and run pipeline in dry-run (skip apply)
+    echo "${CHUNK_START}T00:00:00Z" > "$OUTPUT_DIR/last-successful-run"
+    DRY_RUN=true
+    run_pipeline
+
+    CHUNK_START="$CHUNK_END"
+  done
+
+  # Final run: normal mode (creates the PR with accumulated changelog + fresh suggestions)
+  echo "[$TIMESTAMP] CATCHUP: final run (creating PR)" >> "$LOG_FILE"
+  DRY_RUN=false
+  run_pipeline
+
+else
+  # Normal mode: single pipeline run
+  run_pipeline
 fi

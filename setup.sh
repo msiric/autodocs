@@ -484,10 +484,21 @@ case "${1:-}" in
   status)  shift; cmd_status "$@"; exit 0 ;;
   metrics) shift; cmd_metrics "$@"; exit 0 ;;
   upgrade) shift; cmd_upgrade "$@"; exit 0 ;;
+  catchup)
+    shift
+    local_config=$(find_config 2>/dev/null) || { echo "Error: No config.yaml found."; exit 1; }
+    local_output=$(dirname "$local_config")
+    sync_script="$local_output/autodocs-sync.sh"
+    if [ ! -f "$sync_script" ]; then
+      echo "Error: $sync_script not found. Run setup.sh first."
+      exit 1
+    fi
+    exec bash "$sync_script" --since "$@"
+    ;;
   --quick) QUICK_MODE=true ;;
   "")      ;; # no args = full setup
   -*)      ;; # other flags
-  *)       echo "Usage: setup.sh [--quick] | team | docs | paths | config | analyze | status | metrics | upgrade"; exit 1 ;;
+  *)       echo "Usage: setup.sh [--quick] | team | docs | paths | config | analyze | status | metrics | upgrade | catchup"; exit 1 ;;
 esac
 
 QUICK_MODE=${QUICK_MODE:-false}

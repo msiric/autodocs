@@ -34,3 +34,8 @@
 !config.example.yaml
 .serena/
 __pycache__/
+
+# Development artifacts (plans, reviews, drafts)
+plan-*.md
+review-*.md
+blog-draft.md

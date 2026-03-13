@@ -167,6 +167,13 @@ docs:
 # Manual run (full daily chain: sync → drift → suggest → apply PR)
 autodocs-now
 
+# Catchup: process historical PRs for brownfield projects
+# Walks through weekly chunks, builds changelog, then creates one fix PR
+autodocs-sync.sh --since 2025-09-01
+
+# Dry-run catchup (shows chunk count and estimated time, no LLM calls)
+autodocs-sync.sh --since 2025-09-01 --dry-run
+
 # Structural scan (usually weekly, can run manually)
 autodocs-structural-scan.sh
 ```
