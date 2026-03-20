@@ -77,6 +77,14 @@ def validate_config(config: dict) -> list[str]:
         elif auto_pr.get("enabled") and not auto_pr.get("target_branch"):
             errors.append("auto_pr.enabled requires auto_pr.target_branch")
 
+    # LLM backend (optional)
+    llm = config.get("llm")
+    if llm is not None:
+        if not isinstance(llm, dict):
+            errors.append("llm must be a mapping")
+        elif llm.get("backend") and llm["backend"] not in ("cli", "api"):
+            errors.append("llm.backend must be 'cli' or 'api'")
+
     return errors
 
 

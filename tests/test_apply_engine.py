@@ -1,0 +1,328 @@
+"""Unit tests for apply_engine.py."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+from apply_engine import (
+    ApplyResult,
+    Suggestion,
+    apply_edits,
+    build_pr_body,
+    filter_suggestions,
+    parse_suggestions,
+    record_tracking,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+SAMPLE_SUGGESTIONS_MD = """---
+date: 2026-03-20
+suggestion_count: 2
+verified: 2/2
+---
+# Suggested Updates — 2026-03-20
+
+## guide.md — Authentication
+**Triggered by:** PR #42 "Fix auth handler"
+**Confidence:** CONFIDENT
+
+### FIND (in guide.md, section "Authentication"):
+> GET /api/users — Returns all users
+
+### REPLACE WITH:
+> GET /api/users — Returns all users. Rate limited: 100 req/min.
+
+**Verified:** YES — FIND text confirmed in doc (line 10)
+
+### Reasoning:
+PR #42 added rate limiting to the users endpoint.
+
+---
+
+## guide.md — Error Handling
+**Triggered by:** PR #43 "Add error logging"
+**Confidence:** REVIEW
+
+### FIND (anchor — insert after this line):
+> ## Error Handling
+
+### INSERT AFTER:
+> Errors are now logged to the central logging service.
+
+**Verified:** YES — anchor confirmed in doc
+
+### Reasoning:
+PR #43 added centralized error logging.
+"""
+
+REVIEW_ONLY_MD = """---
+date: 2026-03-20
+suggestion_count: 1
+verified: 1/1
+---
+# Suggested Updates
+
+## guide.md — API
+**Triggered by:** PR #50
+**Confidence:** REVIEW
+
+### FIND:
+> some text
+
+### REPLACE WITH:
+> new text
+
+**Verified:** YES
+"""
+
+
+# ---------------------------------------------------------------------------
+# parse_suggestions
+# ---------------------------------------------------------------------------
+
+class TestParseSuggestions:
+    def test_parses_replace_and_insert(self):
+        suggestions = parse_suggestions(SAMPLE_SUGGESTIONS_MD)
+        assert len(suggestions) == 2
+
+        s1 = suggestions[0]
+        assert s1.doc == "guide.md"
+        assert s1.section == "Authentication"
+        assert s1.operation == "REPLACE"
+        assert s1.find_text == "GET /api/users — Returns all users"
+        assert "Rate limited" in s1.replace_text
+        assert s1.confidence == "CONFIDENT"
+        assert s1.verified == "YES"
+        assert "PR #42" in s1.triggered_by
+
+        s2 = suggestions[1]
+        assert s2.operation == "INSERT_AFTER"
+        assert s2.confidence == "REVIEW"
+
+    def test_empty_input(self):
+        assert parse_suggestions("") == []
+        assert parse_suggestions("No suggestions.") == []
+
+    def test_single_suggestion(self):
+        md = """## doc.md — Section
+**Triggered by:** PR #1
+**Confidence:** CONFIDENT
+
+### FIND:
+> old text
+
+### REPLACE WITH:
+> new text
+
+**Verified:** YES
+"""
+        suggestions = parse_suggestions(md)
+        assert len(suggestions) == 1
+        assert suggestions[0].find_text == "old text"
+        assert suggestions[0].replace_text == "new text"
+
+    def test_multiline_find_replace(self):
+        md = """## doc.md — Section
+**Confidence:** CONFIDENT
+
+### FIND:
+> line one
+> line two
+> line three
+
+### REPLACE WITH:
+> replaced one
+> replaced two
+
+**Verified:** YES
+"""
+        suggestions = parse_suggestions(md)
+        assert len(suggestions) == 1
+        assert suggestions[0].find_text == "line one\nline two\nline three"
+        assert suggestions[0].replace_text == "replaced one\nreplaced two"
+
+
+# ---------------------------------------------------------------------------
+# filter_suggestions
+# ---------------------------------------------------------------------------
+
+class TestFilterSuggestions:
+    def test_confident_yes_passes(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "CONFIDENT", "YES", "", "")
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 1
+        assert len(skipped) == 0
+
+    def test_review_skipped(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "REVIEW", "YES", "", "")
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 0
+        assert skipped[0]["reason"] == "REVIEW confidence"
+
+    def test_verified_no_skipped(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "CONFIDENT", "NO", "", "")
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 0
+        assert "Verified: NO" in skipped[0]["reason"]
+
+    def test_find_verification_fail(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "CONFIDENT", "YES", "", "")
+        (tmp_path / "verified-suggestions.json").write_text(
+            json.dumps([{"status": "FAIL", "reason": "not found"}])
+        )
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 0
+        assert "FIND verification" in skipped[0]["reason"]
+
+    def test_replace_blocked(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "CONFIDENT", "YES", "", "")
+        (tmp_path / "replace-verification.json").write_text(
+            json.dumps([{"gate": "BLOCK", "values": [{"status": "MISMATCH", "reason": "bad value"}]}])
+        )
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 0
+        assert "REPLACE blocked" in skipped[0]["reason"]
+
+    def test_replace_auto_apply(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "CONFIDENT", "YES", "", "")
+        (tmp_path / "replace-verification.json").write_text(
+            json.dumps([{"gate": "AUTO_APPLY", "values": []}])
+        )
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 1
+
+    def test_no_verification_files_passes(self, tmp_path: Path):
+        s = Suggestion("doc.md", "Sec", "REPLACE", "find", "replace", "CONFIDENT", "YES", "", "")
+        applicable, skipped = filter_suggestions([s], tmp_path)
+        assert len(applicable) == 1
+
+
+# ---------------------------------------------------------------------------
+# apply_edits
+# ---------------------------------------------------------------------------
+
+class TestApplyEdits:
+    def test_replace_works(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("# Guide\n\nGET /api/users — Returns all users\n\nMore content.\n")
+        s = Suggestion("guide.md", "API", "REPLACE",
+                        "GET /api/users — Returns all users",
+                        "GET /api/users — Returns all users. Rate limited.",
+                        "CONFIDENT", "YES", "PR #1", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        assert "Rate limited" in doc.read_text()
+
+    def test_insert_after_works(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("# Guide\n\n## Error Handling\n\nExisting content.\n")
+        s = Suggestion("guide.md", "Error Handling", "INSERT_AFTER",
+                        "## Error Handling",
+                        "Errors are logged centrally.",
+                        "CONFIDENT", "YES", "PR #2", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        content = doc.read_text()
+        assert "Errors are logged centrally." in content
+        assert content.index("Errors are logged") > content.index("## Error Handling")
+
+    def test_find_not_found_expired(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("# Guide\n\n## Authentication\n\nDifferent content.\n")
+        s = Suggestion("guide.md", "Authentication", "REPLACE",
+                        "text that does not exist",
+                        "new text",
+                        "CONFIDENT", "YES", "PR #3", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 0
+        assert len(expired) == 1
+        assert "EXPIRED" in expired[0]["reason"]
+
+    def test_section_removed(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("# Guide\n\nNo sections here.\n")
+        s = Suggestion("guide.md", "Missing Section", "REPLACE",
+                        "old text", "new text",
+                        "CONFIDENT", "YES", "PR #4", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert "SECTION REMOVED" in expired[0]["reason"]
+
+    def test_doc_not_found(self, tmp_path: Path):
+        s = Suggestion("missing.md", "Sec", "REPLACE", "a", "b", "CONFIDENT", "YES", "", "")
+        applied, expired = apply_edits([s], {"missing.md": tmp_path / "nope.md"})
+        assert len(expired) == 1
+
+    def test_multiple_edits_same_file(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("AAA\nBBB\nCCC\n")
+        s1 = Suggestion("guide.md", "A", "REPLACE", "AAA", "XXX", "CONFIDENT", "YES", "", "")
+        s2 = Suggestion("guide.md", "B", "REPLACE", "BBB", "YYY", "CONFIDENT", "YES", "", "")
+        applied, expired = apply_edits([s1, s2], {"guide.md": doc})
+        assert len(applied) == 2
+        content = doc.read_text()
+        assert "XXX" in content
+        assert "YYY" in content
+        assert "AAA" not in content
+
+
+# ---------------------------------------------------------------------------
+# build_pr_body
+# ---------------------------------------------------------------------------
+
+class TestBuildPrBody:
+    def test_with_applied(self):
+        body = build_pr_body(
+            [{"doc": "guide.md", "section": "Auth", "operation": "REPLACE", "triggered_by": "PR #1"}],
+            [], [], "2026-03-20",
+        )
+        assert "Applied 1 suggestions" in body
+        assert "guide.md — Auth" in body
+        assert "autodocs:meta" in body
+
+    def test_all_skipped(self):
+        body = build_pr_body(
+            [], [{"suggestion": "s", "reason": "REVIEW"}], [], "2026-03-20",
+        )
+        assert "No suggestions were auto-applied" in body
+        assert "Needs Manual Review" in body
+
+    def test_empty(self):
+        body = build_pr_body([], [], [], "2026-03-20")
+        assert "autodocs" in body
+
+
+# ---------------------------------------------------------------------------
+# record_tracking
+# ---------------------------------------------------------------------------
+
+class TestRecordTracking:
+    def test_creates_new_file(self, tmp_path: Path):
+        record_tracking(tmp_path, 99, "github", "2026-03-20",
+                         [{"doc": "guide.md", "section": "Auth", "operation": "REPLACE"}])
+        data = json.loads((tmp_path / "feedback" / "open-prs.json").read_text())
+        assert len(data) == 1
+        assert data[0]["pr_number"] == 99
+
+    def test_appends_to_existing(self, tmp_path: Path):
+        fb = tmp_path / "feedback"
+        fb.mkdir()
+        (fb / "open-prs.json").write_text('[{"pr_number": 1, "state": "open"}]')
+        record_tracking(tmp_path, 99, "github", "2026-03-20", [])
+        data = json.loads((fb / "open-prs.json").read_text())
+        assert len(data) == 2
+
+    def test_idempotent(self, tmp_path: Path):
+        record_tracking(tmp_path, 99, "github", "2026-03-20", [])
+        record_tracking(tmp_path, 99, "github", "2026-03-20", [])
+        data = json.loads((tmp_path / "feedback" / "open-prs.json").read_text())
+        assert len(data) == 1

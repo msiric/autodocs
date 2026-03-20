@@ -28,9 +28,10 @@ except ImportError:
     print("Error: pyyaml is required. Install: pip3 install pyyaml", file=sys.stderr)
     sys.exit(2)
 
-from claude_runner import ClaudeRunner
+from llm_runner import LLMRunner, CLIRunner, create_runner
 from schema_helper import validate_config
 from storage import LocalStorage
+from apply_engine import deterministic_apply
 from sync_engine import deterministic_sync
 
 
@@ -259,7 +260,7 @@ class Orchestrator:
         output_dir: Path,
         repo_dir: Path,
         config: dict,
-        runner: ClaudeRunner,
+        runner: LLMRunner,
         logger: Logger,
         scripts_dir: Path,
         dry_run: bool = False,
@@ -535,7 +536,7 @@ class Orchestrator:
         self.logger.log(f"VERIFY (shadow): {verify_status}")
         self.logger.metric("verify-shadow", verify_status)
 
-    # -- Call 4: Apply --
+    # -- Call 4: Apply (deterministic, with LLM fallback) --
 
     def _run_apply(self) -> None:
         if self.dry_run:
@@ -543,14 +544,32 @@ class Orchestrator:
             self.logger.log("DRY RUN — skipping apply")
             return
 
-        prompt_path = self.output_dir / "apply-prompt.md"
-        if not prompt_path.exists():
-            return
         if read_config_key(self.config, "auto_pr.enabled") != "true":
             return
         if not (self.output_dir / "drift-suggestions.md").exists():
             return
         if _suggestion_count_zero(self.output_dir):
+            return
+
+        result = deterministic_apply(self.config, self.output_dir, self.repo_dir)
+        if result.success:
+            self.status["apply"] = "success"
+            msg = f"APPLY SUCCESS: {len(result.applied)} applied"
+            if result.pr_number:
+                msg += f", PR #{result.pr_number}"
+            self.logger.log(msg)
+            self.logger.metric("apply", "success")
+            return
+
+        # Fallback to LLM apply
+        self._run_apply_llm()
+
+    def _run_apply_llm(self) -> None:
+        """LLM-based apply fallback."""
+        prompt_path = self.output_dir / "apply-prompt.md"
+        if not prompt_path.exists():
+            self.logger.log("APPLY FAILED — no apply-prompt.md and deterministic apply failed")
+            self.logger.metric("apply", "failed", 1)
             return
 
         rc, output = self.runner.run(
@@ -562,7 +581,7 @@ class Orchestrator:
 
         if rc == 0:
             self.status["apply"] = "success"
-            self.logger.log("APPLY SUCCESS")
+            self.logger.log("APPLY SUCCESS (LLM fallback)")
         else:
             self.status["apply"] = "failed"
             self.logger.log(f"APPLY FAILED (exit {rc})")
@@ -663,7 +682,7 @@ def run_catchup(
     output_dir: Path,
     repo_dir: Path,
     config: dict,
-    runner: ClaudeRunner,
+    runner: LLMRunner,
     logger: Logger,
     scripts_dir: Path,
     since_date: str,
@@ -745,7 +764,7 @@ def _compute_chunks(since: str, until: str, chunk_days: int) -> list[tuple[str, 
 def run_structural_scan(
     output_dir: Path,
     repo_dir: Path,
-    runner: ClaudeRunner,
+    runner: LLMRunner,
     logger: Logger,
 ) -> None:
     """Weekly structural scan: verify doc file references exist."""
@@ -820,7 +839,7 @@ def main() -> None:
         logger.metric("sync", "config-invalid", 1)
         sys.exit(1)
 
-    runner = ClaudeRunner()
+    runner = create_runner(config)
 
     # Structural scan mode
     if args.structural_scan:

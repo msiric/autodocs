@@ -266,8 +266,10 @@ EOF
     run python3 -c "
 import importlib.util, sys, os
 sys.path.insert(0, os.path.dirname('$f'))
-spec = importlib.util.spec_from_file_location('mod', '$f')
+name = os.path.splitext(os.path.basename('$f'))[0]
+spec = importlib.util.spec_from_file_location(name, '$f')
 mod = importlib.util.module_from_spec(spec)
+sys.modules[name] = mod
 try:
     spec.loader.exec_module(mod)
 except SystemExit as e:

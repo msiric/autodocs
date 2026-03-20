@@ -194,6 +194,16 @@ docs:
 #   max_actions_per_run: 5    # Limit closes per run (default: 5)
 
 # ---------------------------------------------------------------------------
+# LLM backend (optional)
+# "cli" = Claude Code CLI (default), "api" = Anthropic API direct.
+# CLI supports all pipeline features. API supports drift + suggest (Read/Write).
+# Sync and apply are deterministic Python regardless of backend.
+# ---------------------------------------------------------------------------
+# llm:
+#   backend: "cli"                      # "cli" or "api"
+#   model: "claude-sonnet-4-20250514"   # Model for API backend (CLI uses its own model)
+
+# ---------------------------------------------------------------------------
 # Metadata
 # ---------------------------------------------------------------------------
 last_verified: "2026-01-01"
