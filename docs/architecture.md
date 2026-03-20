@@ -105,13 +105,11 @@ Each prompt runs as a separate Claude Code invocation with its own allowlist:
 
 | Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest | Call 3v: Verify | Call 4: Apply |
 |----------|-------------|---------------|-----------------|-----------------|---------------|
-| Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest | Call 4: Apply |
-|----------|-------------|---------------|-----------------|---------------|
-| Purpose | Fetch PR data | Detect stale sections | Generate FIND/REPLACE | Apply edits + open PR |
-| Inputs | fetched-prs.json, config | drift-context.json, docs | suggest-context.json, source-context/, docs | drift-suggestions.md, verification JSONs |
-| Outputs | daily-report.md | drift-report/status/log.md | drift-suggestions.md, changelog | git branch + PR |
-| Runs when | Always | Call 1 succeeded | HIGH/CRITICAL alerts | auto_pr + verified suggestions |
-| Deterministic pre-processing | Pre-fetch PRs, date computation | match-helper, drift-helper pre-process | suggest-dedup, source copy | verify-finds, verify-replaces |
+| Purpose | Fetch PR data | Detect stale sections | Generate FIND/REPLACE | Verify FIND/REPLACE | Apply edits + open PR |
+| Inputs | fetched-prs.json, config | drift-context.json, docs | suggest-context.json, source-context/, docs | drift-suggestions.md, docs | drift-suggestions.md, verification JSONs |
+| Outputs | daily-report.md | drift-report/status/log.md | drift-suggestions.md, changelog | drift-suggestions-verify.md | git branch + PR |
+| Runs when | Always | Call 1 succeeded | HIGH/CRITICAL alerts | multi_model enabled + CONFIDENT suggestions | auto_pr + verified suggestions |
+| Deterministic pre-processing | Pre-fetch PRs, date computation | match-helper, drift-helper pre-process | suggest-dedup, source copy | N/A | verify-finds, verify-replaces |
 
 Key properties:
 - Each call can fail without corrupting the others

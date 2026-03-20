@@ -123,7 +123,8 @@ suggestion_count: 0
 No suggestions.
 "
   echo "auto_pr:
-  enabled: true" >> "$TEST_DIR/output/config.yaml"
+  enabled: true
+  target_branch: main" >> "$TEST_DIR/output/config.yaml"
 
   run run_sync
   [ "$(read_status suggest)" = "success" ]
@@ -237,7 +238,8 @@ No drift.
   create_drift_fixtures
   create_suggest_fixtures
   echo "auto_pr:
-  enabled: true" >> "$TEST_DIR/output/config.yaml"
+  enabled: true
+  target_branch: main" >> "$TEST_DIR/output/config.yaml"
 
   run run_sync --dry-run
   [ "$(read_status suggest)" = "success" ]
@@ -319,9 +321,10 @@ No drift.
   create_suggest_fixtures
 
   run run_sync
-  grep -q '"call":"sync"' "$TEST_DIR/output/metrics.jsonl"
-  grep -q '"call":"drift"' "$TEST_DIR/output/metrics.jsonl"
-  grep -q '"call":"suggest"' "$TEST_DIR/output/metrics.jsonl"
+  [ -f "$TEST_DIR/output/metrics.jsonl" ] || { echo "metrics.jsonl missing"; echo "log:"; cat "$TEST_DIR/output/sync.log" 2>/dev/null; false; }
+  grep -q '"call": "sync"' "$TEST_DIR/output/metrics.jsonl" || grep -q '"call":"sync"' "$TEST_DIR/output/metrics.jsonl"
+  grep -q '"call": "drift"' "$TEST_DIR/output/metrics.jsonl" || grep -q '"call":"drift"' "$TEST_DIR/output/metrics.jsonl"
+  grep -q '"call": "suggest"' "$TEST_DIR/output/metrics.jsonl" || grep -q '"call":"suggest"' "$TEST_DIR/output/metrics.jsonl"
 }
 
 # ============================================================

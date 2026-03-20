@@ -12,6 +12,8 @@ Usage:
   python3 verify-helper.py verify-replaces <output_dir> [<repo_dir>]
 """
 
+from __future__ import annotations
+
 import json
 import re
 import sys
@@ -28,12 +30,12 @@ except ImportError:
 # FIND verification
 # ---------------------------------------------------------------------------
 
-def _normalize_whitespace(text):
+def _normalize_whitespace(text: str) -> str:
     """Collapse all whitespace runs (spaces, tabs, newlines) into single spaces."""
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _check_find_in_doc(find_text, doc_text):
+def _check_find_in_doc(find_text: str, doc_text: str) -> tuple[str, str]:
     """Check if FIND text exists in doc. Returns (status, reason).
 
     Tries exact match first, then falls back to whitespace-normalized match.
@@ -47,7 +49,7 @@ def _check_find_in_doc(find_text, doc_text):
     return "FAIL", "FIND text not found in doc"
 
 
-def verify_finds(output_dir, repo_dir):
+def verify_finds(output_dir: str | Path, repo_dir: str | Path) -> bool:
     """Mechanically verify every FIND block in suggestions exists in the target doc.
 
     Reads drift-suggestions.md, checks each FIND text against the actual file
@@ -79,7 +81,7 @@ def verify_finds(output_dir, repo_dir):
     in_find = False
     confidence = ""
 
-    def _verify_pending_find():
+    def _verify_pending_find() -> None:
         """Verify the currently accumulated FIND block and append result."""
         find_text = "\n".join(current_find)
         if not find_text or not current_doc:
@@ -162,7 +164,7 @@ SKIP_VALUES = {
 }
 
 
-def strip_code_comments(text):
+def strip_code_comments(text: str) -> str:
     """Strip common comment patterns from source code for cleaner matching.
 
     Handles C-style (/* */), single-line (//), and Python-style (#) comments.
@@ -173,7 +175,7 @@ def strip_code_comments(text):
     return text
 
 
-def verify_replaces(output_dir, repo_dir=None):
+def verify_replaces(output_dir: str | Path, repo_dir: str | Path | None = None) -> bool:
     """Verify REPLACE text values against source code files.
 
     For each suggestion, extracts concrete values from REPLACE text and checks
@@ -264,7 +266,7 @@ def verify_replaces(output_dir, repo_dir=None):
     return blocked == 0
 
 
-def _extract_values(replace_text):
+def _extract_values(replace_text: str) -> list[dict[str, str]]:
     """Extract verifiable values from REPLACE text."""
     values = []
     seen = set()
@@ -278,7 +280,7 @@ def _extract_values(replace_text):
     return values
 
 
-def _verify_values(values, combined_source, source_corpus, repo_dir=None):
+def _verify_values(values: list[dict[str, str]], combined_source: str, source_corpus: dict[str, str], repo_dir: str | Path | None = None) -> list[dict[str, str]]:
     """Verify each value against source corpus. Returns list with status."""
     results = []
     for v in values:
@@ -332,7 +334,7 @@ def _verify_values(values, combined_source, source_corpus, repo_dir=None):
     return results
 
 
-def _is_code_reference(value, value_type):
+def _is_code_reference(value: str, value_type: str) -> bool:
     """Heuristic: does this value look like a code reference vs prose?"""
     if value_type == "backtick_id":
         return True
@@ -345,7 +347,7 @@ def _is_code_reference(value, value_type):
     return False
 
 
-def _gate_decision(verified_values):
+def _gate_decision(verified_values: list[dict[str, str]]) -> str:
     """Determine gate: BLOCK, AUTO_APPLY, or REVIEW."""
     if not verified_values:
         return "REVIEW"
@@ -362,7 +364,7 @@ def _gate_decision(verified_values):
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)

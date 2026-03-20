@@ -238,7 +238,6 @@ If `auto_pr` is enabled in config, autodocs automatically:
 2. Includes the changelog alongside the edits
 3. Creates a branch and opens a PR with the `autodocs` label
 4. The human reviews and merges — standard code review workflow
-5. The human reviews and merges — standard code review workflow
 
 ### Structural scan
 

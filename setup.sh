@@ -421,7 +421,7 @@ import json, sys
 from collections import Counter
 from datetime import datetime, timedelta
 
-lines = open('$metrics').readlines()
+lines = open(sys.argv[1]).readlines()
 entries = [json.loads(l) for l in lines if l.strip()]
 if not entries:
     print('No metrics recorded yet.')
@@ -471,7 +471,7 @@ if recent_sync:
     print('Runs per day (last 7):')
     for day in sorted(by_day.keys()):
         print(f'  {day}  {\"*\" * by_day[day]}')
-" 2>/dev/null || echo "Error reading metrics."
+" "$metrics" 2>/dev/null || echo "Error reading metrics."
 }
 
 # --- Subcommand routing ---

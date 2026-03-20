@@ -261,9 +261,11 @@ EOF
 # ============================================================
 
 @test "all Python scripts load without import errors" {
-  for f in "$BATS_TEST_DIRNAME/../scripts/"*.py; do
+  SCRIPTS_DIR="$BATS_TEST_DIRNAME/../scripts"
+  for f in "$SCRIPTS_DIR/"*.py; do
     run python3 -c "
-import importlib.util, sys
+import importlib.util, sys, os
+sys.path.insert(0, os.path.dirname('$f'))
 spec = importlib.util.spec_from_file_location('mod', '$f')
 mod = importlib.util.module_from_spec(spec)
 try:

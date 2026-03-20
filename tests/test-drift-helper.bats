@@ -706,6 +706,49 @@ EOF
   echo "$result" | grep -q "Auth"
 }
 
+@test "merge-changelogs handles two new entries in same section" {
+  cat > "$TEST_DIR/changelog-guide.md.bak" <<EOF
+# guide.md — Changelog
+
+## Auth
+
+### 2026-03-05 — PR #5 by alice
+**Changed:** Original entry.
+**Why:** Original reason.
+
+---
+EOF
+  cat > "$TEST_DIR/changelog-guide.md" <<EOF
+# guide.md — Changelog
+
+## Auth
+
+### 2026-03-09 — PR #11 by carol
+**Changed:** Second new entry.
+**Why:** Second reason.
+
+### 2026-03-08 — PR #10 by bob
+**Changed:** First new entry.
+**Why:** First reason.
+
+### 2026-03-05 — PR #5 by alice
+**Changed:** Original entry.
+**Why:** Original reason.
+
+---
+EOF
+
+  python3 "$HELPER" merge-changelogs "$TEST_DIR"
+  result=$(cat "$TEST_DIR/changelog-guide.md")
+  # Both new entries should be present
+  echo "$result" | grep -q "PR #10"
+  echo "$result" | grep -q "PR #11"
+  # Original entry should still exist
+  echo "$result" | grep -q "PR #5"
+  # Backup should be cleaned up
+  [ ! -f "$TEST_DIR/changelog-guide.md.bak" ]
+}
+
 @test "merge-changelogs skips when no backup exists" {
   cat > "$TEST_DIR/changelog-guide.md" <<EOF
 # guide.md — Changelog

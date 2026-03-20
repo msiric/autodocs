@@ -16,6 +16,8 @@ suggest-dedup: Reads drift-status.md, changelog-*.md, feedback/open-prs.json.
                Writes suggest-context.json with actionable alerts after dedup.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -37,7 +39,7 @@ UNMAPPED = "UNMAPPED"
 # Parsing
 # ---------------------------------------------------------------------------
 
-def parse_report(report_path):
+def parse_report(report_path: Path) -> dict:
     """Parse daily-report.md into structured data."""
     if not report_path.exists():
         return {"date": "", "prs": [], "anomalies": []}
@@ -125,7 +127,7 @@ def parse_report(report_path):
     return result
 
 
-def parse_status(status_path):
+def parse_status(status_path: Path) -> tuple[list[dict], list[dict]]:
     """Parse drift-status.md into unchecked and checked entries."""
     unchecked = []
     checked = []
@@ -157,7 +159,7 @@ def parse_status(status_path):
     return unchecked, checked
 
 
-def apply_lifecycle(output_dir):
+def apply_lifecycle(output_dir: str | Path) -> None:
     """Post-process drift-status.md: expire LOW entries >7 days, trim checked >30 days.
 
     Called after Call 2 (drift) to enforce lifecycle rules that the LLM cannot apply.
@@ -194,7 +196,7 @@ def apply_lifecycle(output_dir):
     status_path.write_text("\n".join(lines) + "\n" if lines else "")
 
 
-def parse_resolved_mappings(mappings_path):
+def parse_resolved_mappings(mappings_path: Path) -> dict[str, str]:
     """Parse resolved-mappings.md into a dict of {path: (section, doc)}."""
     mappings = {}
     if not mappings_path.exists():
@@ -209,7 +211,7 @@ def parse_resolved_mappings(mappings_path):
     return mappings
 
 
-def parse_doc_sections(doc_path):
+def parse_doc_sections(doc_path: Path) -> list[dict]:
     """Extract ## headers from a doc, with breadcrumb disambiguation."""
     if not doc_path.exists():
         return []
@@ -248,7 +250,7 @@ def parse_doc_sections(doc_path):
 # Alert generation
 # ---------------------------------------------------------------------------
 
-def build_section_to_doc(config):
+def build_section_to_doc(config: dict) -> dict[str, str]:
     """Build a {section_name: doc_name} index from all docs' package_maps."""
     index = {}
     for doc in config.get("docs") or []:
@@ -264,7 +266,7 @@ def build_section_to_doc(config):
     return index
 
 
-def generate_alerts(report, mappings, config):
+def generate_alerts(report: dict, mappings: dict, config: dict) -> list[dict]:
     """Generate new alerts from today's PRs using mappings and change types."""
     alerts = []
     docs = config.get("docs") or []
@@ -342,7 +344,7 @@ def generate_alerts(report, mappings, config):
     return alerts
 
 
-def generate_anomaly_alerts(report, config):
+def generate_anomaly_alerts(report: dict, config: dict) -> list[dict]:
     """Generate alerts from NEW telemetry anomalies."""
     alerts = []
     docs = config.get("docs") or []
@@ -365,7 +367,7 @@ def generate_anomaly_alerts(report, config):
 # Grouping, dedup, lifecycle
 # ---------------------------------------------------------------------------
 
-def group_alerts(alerts):
+def group_alerts(alerts: list[dict]) -> list[dict]:
     """Group alerts by (doc, section), merge PR lists."""
     grouped = {}
     for a in alerts:
@@ -384,7 +386,7 @@ def group_alerts(alerts):
     return list(grouped.values())
 
 
-def dedup_against_status(new_alerts, unchecked):
+def dedup_against_status(new_alerts: list[dict], unchecked: list[dict]) -> tuple[list[dict], list[dict]]:
     """Dedup new alerts against existing unchecked status entries.
 
     Returns (final_alerts, dedup_actions) where:
@@ -409,7 +411,7 @@ def dedup_against_status(new_alerts, unchecked):
     return final, actions
 
 
-def manage_lifecycle(unchecked, checked, today_str):
+def manage_lifecycle(unchecked: list[dict], checked: list[dict], today_str: str) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """Apply lifecycle rules to drift-status entries.
 
     Returns (kept_unchecked, kept_checked, expired, trimmed).
@@ -443,28 +445,28 @@ def manage_lifecycle(unchecked, checked, today_str):
 # Changelog merger
 # ---------------------------------------------------------------------------
 
-def _parse_changelog_sections(text):
+def _parse_changelog_sections(text: str) -> list[tuple[str, list[dict]]]:
     """Parse a changelog file into an ordered list of (section_name, entries).
 
     Each entry is a dict with 'pr_number' (int) and 'text' (raw lines including header).
     Preserves section and entry order from the file.
     """
-    sections = []
+    sections = []       # [(section_name, entries_list)] — preserves insertion order
+    section_index = {}  # {section_name: entries_list} — same list objects as in sections
     current_section = ""
     current_entry_lines = []
     current_entry_pr = None
 
     def _flush_entry():
         if current_entry_lines and current_section:
-            sections_dict = dict(sections)
-            if current_section not in sections_dict:
-                sections.append((current_section, []))
-                sections_dict = dict(sections)
-            sections_dict[current_section].append({
+            if current_section not in section_index:
+                entries = []
+                sections.append((current_section, entries))
+                section_index[current_section] = entries
+            section_index[current_section].append({
                 "pr_number": current_entry_pr,
                 "text": "\n".join(current_entry_lines),
             })
-            # Update in-place (sections list shares refs with dict values)
 
     for line in text.splitlines():
         if line.startswith("## ") and not line.startswith("### "):
@@ -495,7 +497,7 @@ def _parse_changelog_sections(text):
     return sections
 
 
-def merge_changelogs(output_dir):
+def merge_changelogs(output_dir: str | Path) -> None:
     """Merge new changelog entries from LLM output into original files, preserving order.
 
     For each changelog-*.md that has a .bak backup (saved before Call 3):
@@ -579,7 +581,7 @@ def merge_changelogs(output_dir):
 # Suggest dedup
 # ---------------------------------------------------------------------------
 
-def parse_changelog_entries(output_dir):
+def parse_changelog_entries(output_dir: Path) -> set[tuple[str, str, int]]:
     """Extract (doc, section, PR) tuples from existing changelog files."""
     entries = set()
     for f in output_dir.glob("changelog-*.md"):
@@ -594,7 +596,7 @@ def parse_changelog_entries(output_dir):
     return entries
 
 
-def get_pending_sections(output_dir):
+def get_pending_sections(output_dir: Path) -> set[tuple[str, str]]:
     """Get (doc, section) pairs from open PRs in feedback/open-prs.json."""
     pending = set()
     prs_file = output_dir / "feedback" / "open-prs.json"
@@ -619,7 +621,7 @@ def get_pending_sections(output_dir):
 # Main operations
 # ---------------------------------------------------------------------------
 
-def pre_process(output_dir):
+def pre_process(output_dir: str | Path) -> None:
     """Run full drift pre-processing. Write drift-context.json."""
     output_dir = Path(output_dir)
     config_path = output_dir / "config.yaml"
@@ -685,7 +687,7 @@ def pre_process(output_dir):
     )
 
 
-def suggest_dedup(output_dir):
+def suggest_dedup(output_dir: str | Path) -> None:
     """Run suggest dedup. Write suggest-context.json."""
     output_dir = Path(output_dir)
 
@@ -746,7 +748,7 @@ def suggest_dedup(output_dir):
     )
 
 
-def _detect_changelog_supersession(output_dir, changelog_entries):
+def _detect_changelog_supersession(output_dir: Path, changelog_entries: set[tuple[str, str, int]]) -> list[dict]:
     """Flag changelog entries whose files were modified by later PRs."""
     warnings = []
     report = parse_report(output_dir / "daily-report.md")
@@ -788,7 +790,7 @@ def _detect_changelog_supersession(output_dir, changelog_entries):
 # ---------------------------------------------------------------------------
 
 
-def _run_verify_helper(operation, output_dir, repo_dir=None):
+def _run_verify_helper(operation: str, output_dir: str | Path, repo_dir: str | Path | None = None) -> bool:
     """Delegate to verify-helper.py for backward compatibility."""
     import subprocess
     helper = Path(__file__).parent / "verify-helper.py"
@@ -798,17 +800,17 @@ def _run_verify_helper(operation, output_dir, repo_dir=None):
     return subprocess.run(cmd).returncode == 0
 
 
-def verify_finds(output_dir, repo_dir):
+def verify_finds(output_dir: str | Path, repo_dir: str | Path) -> bool:
     """Delegates to verify-helper.py."""
     return _run_verify_helper("verify-finds", output_dir, repo_dir)
 
 
-def verify_replaces(output_dir, repo_dir=None):
+def verify_replaces(output_dir: str | Path, repo_dir: str | Path | None = None) -> bool:
     """Delegates to verify-helper.py."""
     return _run_verify_helper("verify-replaces", output_dir, repo_dir)
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)

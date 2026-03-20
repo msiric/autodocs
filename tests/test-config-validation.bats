@@ -84,14 +84,14 @@ _read_config() {
   local config_path="$1"
   local key="$2"
   python3 -c "
-import yaml
-c = yaml.safe_load(open('$config_path'))
-keys = '$key'.split('.')
+import yaml, sys
+c = yaml.safe_load(open(sys.argv[1]))
+keys = sys.argv[2].split('.')
 v = c
 for k in keys:
     v = v.get(k, '') if isinstance(v, dict) else ''
 print('true' if v is True else 'false' if v is False else v)
-" 2>/dev/null
+" "$config_path" "$key" 2>/dev/null
 }
 
 @test "read_config returns simple top-level value" {
@@ -135,4 +135,168 @@ EOF
 @test "read_config returns empty for missing config file" {
   result=$(_read_config "$TEST_DIR/nonexistent.yaml" "platform" || true)
   [ -z "$result" ]
+}
+
+# ============================================================
+# Schema validation (schema-helper.py)
+# ============================================================
+
+SCHEMA_HELPER="$BATS_TEST_DIRNAME/../scripts/schema_helper.py"
+
+@test "schema: valid github config passes" {
+  create_config "github"
+  python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+}
+
+@test "schema: valid gitlab config passes" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: gitlab
+gitlab:
+  project_path: "group/repo"
+EOF
+  python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+}
+
+@test "schema: valid bitbucket config passes" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: bitbucket
+bitbucket:
+  workspace: "myws"
+  repo: "myrepo"
+EOF
+  python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+}
+
+@test "schema: valid ado config passes" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: ado
+ado:
+  org: "myorg"
+  project: "myproj"
+EOF
+  python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+}
+
+@test "schema: missing platform fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+github:
+  owner: "test"
+  repo: "test"
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "missing required field: platform"
+}
+
+@test "schema: invalid platform value fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: svn
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "platform must be one of"
+}
+
+@test "schema: missing github.owner fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  repo: "myrepo"
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "github.owner"
+}
+
+@test "schema: missing github block entirely fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "github.owner"
+}
+
+@test "schema: docs as string fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  owner: "test"
+  repo: "test"
+docs: "not a list"
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "docs must be a list"
+}
+
+@test "schema: docs entry missing name fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  owner: "test"
+  repo: "test"
+docs:
+  - repo_path: "docs/guide.md"
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "docs\[0\] missing required field: name"
+}
+
+@test "schema: package_map as string fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  owner: "test"
+  repo: "test"
+docs:
+  - name: "guide.md"
+    package_map: "not a dict"
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "package_map must be a mapping"
+}
+
+@test "schema: relevant_paths as string fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  owner: "test"
+  repo: "test"
+relevant_paths: "not a list"
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "relevant_paths must be a list"
+}
+
+@test "schema: auto_pr enabled without target_branch fails" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  owner: "test"
+  repo: "test"
+auto_pr:
+  enabled: true
+EOF
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "auto_pr.enabled requires auto_pr.target_branch"
+}
+
+@test "schema: minimal valid config passes" {
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: github
+github:
+  owner: "test"
+  repo: "test"
+EOF
+  python3 "$SCHEMA_HELPER" "$TEST_DIR/config.yaml"
+}
+
+@test "schema: missing config file fails" {
+  run python3 "$SCHEMA_HELPER" "$TEST_DIR/nonexistent.yaml"
+  [ "$status" -eq 1 ]
 }

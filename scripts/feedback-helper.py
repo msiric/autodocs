@@ -12,12 +12,14 @@ Operations:
   acceptance-rate                                         Print acceptance rate of resolved PRs
 """
 
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
 
 
-def load_data(path):
+def load_data(path: Path) -> list[dict]:
     if not path.exists():
         return []
     text = path.read_text().strip()
@@ -26,12 +28,12 @@ def load_data(path):
     return json.loads(text)
 
 
-def save_data(path, data):
+def save_data(path: Path, data: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def handle_add_pr(data, args):
+def handle_add_pr(data: list[dict], args: list[str]) -> None:
     number = int(args[0])
     # Idempotent: don't add if already exists
     if any(pr.get("pr_number") == number for pr in data):
@@ -48,7 +50,7 @@ def handle_add_pr(data, args):
     })
 
 
-def handle_list_prs(data, args):
+def handle_list_prs(data: list[dict], args: list[str]) -> None:
     open_only = "--open-only" in args
     for pr in data:
         if open_only and pr.get("state") != "open":
@@ -56,12 +58,12 @@ def handle_list_prs(data, args):
         print(pr.get("pr_number", ""))
 
 
-def handle_has_pr(data, args):
+def handle_has_pr(data: list[dict], args: list[str]) -> bool:
     number = int(args[0])
     return any(pr.get("pr_number") == number for pr in data)
 
 
-def handle_update_pr(data, args):
+def handle_update_pr(data: list[dict], args: list[str]) -> None:
     number = int(args[0])
     new_state = args[1]
     merged_date = args[2] if len(args) > 2 else None
@@ -73,7 +75,7 @@ def handle_update_pr(data, args):
             break
 
 
-def handle_pending_sections(data):
+def handle_pending_sections(data: list[dict]) -> None:
     for pr in data:
         if pr.get("state") != "open":
             continue
@@ -87,7 +89,7 @@ def handle_pending_sections(data):
 AUTOMATED_CLOSE_REASONS = {"superseded", "expired_find", "age_stale", "changes_applied"}
 
 
-def handle_acceptance_rate(data):
+def handle_acceptance_rate(data: list[dict]) -> None:
     merged = [pr for pr in data if pr.get("state") == "merged"]
     # Human rejections: closed without an automated close_reason
     rejected = [pr for pr in data if pr.get("state") == "closed"
@@ -103,7 +105,7 @@ def handle_acceptance_rate(data):
     print(f"{rate:.2f} ({len(merged)} merged, {len(rejected)} rejected, {len(auto_closed)} auto-closed)")
 
 
-def handle_detect_corrections(data, args):
+def handle_detect_corrections(data: list[dict], args: list[str]) -> None:
     """Deprecated: correction detection now lives in pipeline-helper.py (_detect_corrections).
 
     Called automatically during pre-sync. This CLI subcommand is retained for
@@ -113,7 +115,7 @@ def handle_detect_corrections(data, args):
           file=sys.stderr)
 
 
-def handle_discover(data, args):
+def handle_discover(data: list[dict], args: list[str]) -> None:
     """Backfill open-prs.json from platform PR search results (JSON string)."""
     try:
         discovered = json.loads(args[0])
@@ -135,7 +137,7 @@ def handle_discover(data, args):
         })
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)

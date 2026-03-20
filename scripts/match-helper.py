@@ -15,12 +15,14 @@ Priority order (first match wins):
 Outputs: section name, or "UNMAPPED" if no match found.
 """
 
+from __future__ import annotations
+
 import fnmatch
 import os
 import sys
+from pathlib import Path
 
 UNMAPPED = "UNMAPPED"
-from pathlib import Path
 
 try:
     import yaml
@@ -29,13 +31,13 @@ except ImportError:
     sys.exit(0)
 
 
-def load_config(path):
+def load_config(path: Path) -> dict:
     if not path.exists():
         return {}
     return yaml.safe_load(path.read_text()) or {}
 
 
-def strip_source_root(file_path, source_roots):
+def strip_source_root(file_path: str, source_roots: list[str]) -> str:
     """Strip the longest matching source root prefix from the file path."""
     if not source_roots:
         return file_path
@@ -47,7 +49,7 @@ def strip_source_root(file_path, source_roots):
     return file_path
 
 
-def get_all_package_maps(config):
+def get_all_package_maps(config: dict) -> dict[str, str | dict]:
     """Extract all package_map entries from all docs in config."""
     maps = {}
     for doc in config.get("docs") or []:
@@ -56,7 +58,7 @@ def get_all_package_maps(config):
     return maps
 
 
-def resolve_section(value, pr_title=""):
+def resolve_section(value: str | dict, pr_title: str = "") -> str:
     """Resolve a package_map value to a section name.
     Handles both simple strings and complex mappings with title_hints."""
     if isinstance(value, str):
@@ -73,7 +75,12 @@ def resolve_section(value, pr_title=""):
     return UNMAPPED
 
 
-def match_file_with_roots(original_path, stripped_path, package_map, pr_title=""):
+def match_file_with_roots(
+    original_path: str,
+    stripped_path: str,
+    package_map: dict[str, str | dict],
+    pr_title: str = "",
+) -> str:
     """Match a file path against package_map keys using 4-priority system.
 
     Uses original_path for exact/glob matching (priorities 1-2).
@@ -115,12 +122,12 @@ def match_file_with_roots(original_path, stripped_path, package_map, pr_title=""
     return UNMAPPED
 
 
-def _is_safe_path(path):
+def _is_safe_path(path: str) -> bool:
     """Reject paths that could be injection attempts (traversal, absolute)."""
     return path and ".." not in path and not path.startswith("/")
 
 
-def extract_files_from_report(report_path):
+def extract_files_from_report(report_path: str | Path) -> list[tuple[str, str]]:
     """Extract file paths and change types from a daily-report.md file."""
     files = []
     for line in Path(report_path).read_text(encoding="utf-8", errors="replace").splitlines():
@@ -141,7 +148,7 @@ def extract_files_from_report(report_path):
     return files
 
 
-def resolve_report(config_path, report_path):
+def resolve_report(config_path: Path, report_path: Path) -> None:
     """Resolve all files in a daily report to their doc sections."""
     config = load_config(config_path)
     source_roots = config.get("source_roots", [])
@@ -154,7 +161,7 @@ def resolve_report(config_path, report_path):
         print(f"{change_type} {file_path} → {section}")
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)

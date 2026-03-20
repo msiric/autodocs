@@ -4,7 +4,7 @@
 
 load helpers/test-helpers
 
-HELPER="$BATS_TEST_DIRNAME/../scripts/pipeline-helper.py"
+HELPER="$BATS_TEST_DIRNAME/../scripts/platform_helper.py"
 
 # Thin CLI wrapper: calls _detect_stale_prs() directly via Python
 run_stale_detection() {
@@ -19,7 +19,7 @@ run_stale_detection() {
   fi
   python3 -c "
 import json, sys, importlib.util, yaml
-spec = importlib.util.spec_from_file_location('pipeline_helper', '$HELPER')
+spec = importlib.util.spec_from_file_location('platform_helper', '$HELPER')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

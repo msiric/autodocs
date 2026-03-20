@@ -13,6 +13,8 @@ Operations:
   get <field>                   Print a top-level field value
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
@@ -23,18 +25,18 @@ except ImportError:
     sys.exit(2)
 
 
-def load_config(path):
+def load_config(path: Path) -> dict:
     if not path.exists():
         return {}
     text = path.read_text()
     return yaml.safe_load(text) or {}
 
 
-def save_config(path, config):
+def save_config(path: Path, config: dict) -> None:
     path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
 
 
-def handle_list(config, section):
+def handle_list(config: dict, section: str) -> None:
     if section == "team":
         for member in config.get("team_members") or []:
             print(member.get("name", ""))
@@ -46,7 +48,7 @@ def handle_list(config, section):
             print(path)
 
 
-def handle_add(config, args):
+def handle_add(config: dict, args: list[str]) -> None:
     section = args[0]
 
     if section == "team":
@@ -77,7 +79,7 @@ def handle_add(config, args):
             paths.append(path)
 
 
-def handle_remove(config, args):
+def handle_remove(config: dict, args: list[str]) -> None:
     section = args[0]
     name = args[1]
 
@@ -96,7 +98,7 @@ def handle_remove(config, args):
         config["relevant_paths"] = [p for p in paths if p != normalized and p != name]
 
 
-def handle_has(config, args):
+def handle_has(config: dict, args: list[str]) -> bool:
     section = args[0]
     name = args[1]
 
@@ -111,13 +113,13 @@ def handle_has(config, args):
     return False
 
 
-def handle_get(config, field):
+def handle_get(config: dict, field: str) -> None:
     value = config.get(field)
     if value is not None:
         print(value)
 
 
-def handle_verify_docs(config, repo_dir):
+def handle_verify_docs(config: dict, repo_dir: str) -> None:
     """Check that all docs[].repo_path files exist in the repo. Prints missing ones."""
     repo = Path(repo_dir) if repo_dir else Path(".")
     for doc in config.get("docs") or []:
@@ -126,7 +128,7 @@ def handle_verify_docs(config, repo_dir):
             print(f"{doc.get('name', '?')}:{rp}")
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
