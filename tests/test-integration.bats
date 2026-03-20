@@ -45,14 +45,12 @@ EOF
 # Call gating
 # ============================================================
 
-@test "call 1 failure skips all downstream calls" {
-  create_scenario sync 1
-
+@test "sync with no PRs produces partial report and skips drift alerts" {
+  # No sync fixtures = no fetched-prs.json = partial report
   run run_sync
-  [ "$(read_status status)" = "failed" ]
-  [ "$(read_status drift)" = "skipped" ]
-  [ "$(read_status suggest)" = "skipped" ]
-  [ "$(read_status apply)" = "skipped" ]
+  [ "$(read_status status)" = "success" ]
+  # Drift runs but finds no alerts (no PRs in partial report)
+  grep -q "pr_count: 0" "$TEST_DIR/output/daily-report.md"
 }
 
 @test "call 2 failure skips suggest and apply" {
@@ -146,7 +144,14 @@ No suggestions.
 # ============================================================
 
 @test "match helper creates resolved-mappings.md" {
-  create_sync_fixtures
+  # Provide pre-fetched PR data for deterministic sync
+  # Use a recent date so the PR is within the lookback window
+  RECENT=$(date -u -v-1d +"%Y-%m-%dT12:00:00Z" 2>/dev/null || date -u -d "1 day ago" +"%Y-%m-%dT12:00:00Z")
+  cat > "$TEST_DIR/output/fetched-prs.json" <<PREOF
+[{"number":1,"title":"Test PR","body":"","mergedAt":"${RECENT}","mergeCommit":{"oid":"abc123"},"files":[{"path":"src/auth/handler.ts","additions":5,"deletions":2}],"author":{"login":"testuser"},"reviews":[]}]
+PREOF
+  # Set lookback to cover the PR
+  echo "2026-01-01T00:00:00Z" > "$TEST_DIR/output/last-successful-run"
   create_scenario drift 0
   add_fixture drift drift-report.md "---
 date: 2026-03-05

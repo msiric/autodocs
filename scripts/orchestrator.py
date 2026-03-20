@@ -30,6 +30,8 @@ except ImportError:
 
 from claude_runner import ClaudeRunner
 from schema_helper import validate_config
+from storage import LocalStorage
+from sync_engine import deterministic_sync
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +157,14 @@ def _run_helper(scripts_dir: Path, script: str, args: list[str], logger: Logger)
 
 
 def _prefetch_github_prs(config: dict, output_dir: Path, lookback_date: str) -> None:
-    """Pre-fetch merged PRs for GitHub (deterministic, no LLM)."""
+    """Pre-fetch merged PRs for GitHub (deterministic, no LLM).
+
+    Skips if fetched-prs.json already exists (e.g., provided by webhook or test).
+    """
     if read_config_key(config, "platform") != "github":
         return
+    if (output_dir / "fetched-prs.json").exists():
+        return  # Already provided externally
     owner = read_config_key(config, "github.owner")
     repo = read_config_key(config, "github.repo")
     if not owner or not repo:
@@ -237,7 +244,10 @@ INTERMEDIATE_FILES = [
     "drift-report.md", "suggest-context.json", "drift-suggestions.md",
     "drift-suggestions-verify.md", "verified-suggestions.json",
     "replace-verification.json", "pre-sync-result.json",
-    "fetched-prs.json", "current-date.txt", "lookback-date.txt",
+    "current-date.txt", "lookback-date.txt",
+    # Note: fetched-prs.json is NOT cleaned — it may be provided externally
+    # (by webhook, test, or a previous prefetch). It gets overwritten by
+    # _prefetch_github_prs if not already present.
 ]
 
 
@@ -253,6 +263,7 @@ class Orchestrator:
         logger: Logger,
         scripts_dir: Path,
         dry_run: bool = False,
+        storage: LocalStorage | None = None,
     ):
         self.output_dir = output_dir
         self.repo_dir = repo_dir
@@ -261,6 +272,7 @@ class Orchestrator:
         self.logger = logger
         self.scripts_dir = scripts_dir
         self.dry_run = dry_run
+        self.storage = storage or LocalStorage(output_dir)
 
         self.sync_tools, self.apply_tools = get_tool_allowlists(config)
         self.platform = read_config_key(config, "platform")
@@ -327,12 +339,26 @@ class Orchestrator:
         (self.output_dir / "lookback-date.txt").write_text(lookback)
         return lookback
 
-    # -- Call 1: Sync --
+    # -- Call 1: Sync (deterministic, with LLM fallback) --
 
     def _run_sync(self) -> bool:
+        # Try deterministic sync first (no LLM needed)
+        ok = deterministic_sync(self.config, self.output_dir, self.repo_dir)
+        if ok and (self.output_dir / "daily-report.md").exists():
+            self.status["sync"] = "success"
+            self.logger.log("SYNC SUCCESS")
+            self.logger.metric("sync", "success")
+            return True
+
+        # Fallback to LLM sync (for platforms/configs deterministic sync can't handle)
+        return self._run_sync_llm()
+
+    def _run_sync_llm(self) -> bool:
+        """LLM-based sync fallback (e.g., telemetry queries, ADO MCP tools)."""
         prompt_path = self.output_dir / "sync-prompt.md"
         if not prompt_path.exists():
-            self.logger.log("ERROR: sync-prompt.md not found")
+            self.logger.log("SYNC FAILED — no sync-prompt.md and deterministic sync failed")
+            self.logger.metric("sync", "failed", 1)
             return False
 
         rc, output = self.runner.run(
@@ -344,7 +370,7 @@ class Orchestrator:
 
         if rc == 0 and (self.output_dir / "daily-report.md").exists():
             self.status["sync"] = "success"
-            self.logger.log("SYNC SUCCESS")
+            self.logger.log("SYNC SUCCESS (LLM fallback)")
             self.logger.metric("sync", "success", rc)
             return True
 
@@ -549,8 +575,7 @@ class Orchestrator:
         """Write sync-status.md and advance last-successful-run timestamp."""
         acceptance = _get_acceptance_rate(self.scripts_dir, self.output_dir)
 
-        status_file = self.output_dir / "sync-status.md"
-        status_file.write_text(
+        self.storage.write("sync-status.md",
             f"status: {self.status['sync']}\n"
             f"drift: {self.status['drift']}\n"
             f"suggest: {self.status['suggest']}\n"
