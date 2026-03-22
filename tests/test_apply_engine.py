@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from apply_engine import (
     ApplyResult,
     Suggestion,
+    _merge_changelog_into,
     apply_edits,
     build_pr_body,
     filter_suggestions,
@@ -448,6 +449,75 @@ class TestBuildPrBody:
     def test_empty(self):
         body = build_pr_body([], [], [], "2026-03-20")
         assert "autodocs" in body
+
+
+# ---------------------------------------------------------------------------
+# changelog merge (append-only)
+# ---------------------------------------------------------------------------
+
+class TestChangelogMerge:
+    def test_new_entries_appended_to_existing(self, tmp_path: Path):
+        """New PR entries are added; existing entries preserved."""
+        dest = tmp_path / "dest.md"
+        dest.write_text(
+            "# doc.md — Changelog\n\n"
+            "## Auth\n\n"
+            "### 2026-03-01 — PR #1 by alice\n"
+            "**Changed:** Old entry.\n**Why:** Old reason.\n\n---\n"
+        )
+        source = tmp_path / "source.md"
+        source.write_text(
+            "# doc.md — Changelog\n\n"
+            "## Auth\n\n"
+            "### 2026-03-10 — PR #5 by bob\n"
+            "**Changed:** New entry.\n**Why:** New reason.\n\n"
+            "### 2026-03-01 — PR #1 by alice\n"
+            "**Changed:** Reworded.\n**Why:** Different.\n\n---\n"
+        )
+        _merge_changelog_into(source, dest)
+        result = dest.read_text()
+        assert "PR #5" in result   # new entry added
+        assert "PR #1" in result   # old entry kept
+        assert "Old entry" in result  # original text preserved, not LLM rewrite
+        assert "Reworded" not in result  # LLM's rewrite of PR #1 NOT used
+
+    def test_no_new_entries_preserves_dest(self, tmp_path: Path):
+        """If source has no new PRs, dest is unchanged."""
+        original = (
+            "# doc.md — Changelog\n\n"
+            "## Auth\n\n"
+            "### 2026-03-01 — PR #1 by alice\n"
+            "**Changed:** Original.\n\n---\n"
+        )
+        dest = tmp_path / "dest.md"
+        dest.write_text(original)
+        source = tmp_path / "source.md"
+        source.write_text(original)  # same content
+        _merge_changelog_into(source, dest)
+        assert dest.read_text() == original  # unchanged
+
+    def test_new_section_added(self, tmp_path: Path):
+        """New sections from source are appended to dest."""
+        dest = tmp_path / "dest.md"
+        dest.write_text(
+            "# doc.md — Changelog\n\n"
+            "## Auth\n\n"
+            "### 2026-03-01 — PR #1 by alice\n"
+            "**Changed:** Entry.\n\n---\n"
+        )
+        source = tmp_path / "source.md"
+        source.write_text(
+            "# doc.md — Changelog\n\n"
+            "## API Endpoints\n\n"
+            "### 2026-03-10 — PR #5 by bob\n"
+            "**Changed:** New section entry.\n\n---\n"
+        )
+        _merge_changelog_into(source, dest)
+        result = dest.read_text()
+        assert "Auth" in result
+        assert "API Endpoints" in result
+        assert "PR #1" in result
+        assert "PR #5" in result
 
 
 # ---------------------------------------------------------------------------

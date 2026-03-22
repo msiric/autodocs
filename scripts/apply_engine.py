@@ -320,23 +320,142 @@ def copy_changelogs(
     applied: list[dict],
     doc_paths: dict[str, Path],
 ) -> list[Path]:
-    """Copy changelog files alongside edited docs in the repo."""
+    """Merge new changelog entries into repo changelogs (append-only).
+
+    The output directory's changelog may have been rewritten by the LLM.
+    The repo's changelog is the authoritative history. We extract new
+    entries (by PR number) from the output version and insert them into
+    the repo version, preserving all existing entries.
+    """
     copied: list[Path] = []
     docs_with_changes = {a["doc"] for a in applied}
 
     for doc_name in docs_with_changes:
         stem = doc_name.replace(".md", "")
-        changelog = output_dir / f"changelog-{stem}.md"
-        if not changelog.exists():
+        source = output_dir / f"changelog-{stem}.md"
+        if not source.exists():
             continue
         doc_path = doc_paths.get(doc_name)
         if not doc_path:
             continue
         dest = doc_path.parent / f"changelog-{stem}.md"
-        shutil.copy2(changelog, dest)
+
+        if dest.exists():
+            # Merge: only add entries whose PR# is new to the repo version
+            _merge_changelog_into(source, dest)
+        else:
+            # No existing changelog in repo — copy the full file
+            shutil.copy2(source, dest)
         copied.append(dest)
 
     return copied
+
+
+def _merge_changelog_into(source: Path, dest: Path) -> None:
+    """Merge new entries from source changelog into dest (append-only).
+
+    Parses both files by section. For each section, inserts entries whose
+    PR number doesn't already exist in dest. Preserves dest's existing
+    entries and section order.
+    """
+    source_text = source.read_text(encoding="utf-8", errors="replace")
+    dest_text = dest.read_text(encoding="utf-8", errors="replace")
+
+    # Extract header from dest
+    header = ""
+    for line in dest_text.splitlines():
+        if line.startswith("# "):
+            header = line
+            break
+
+    source_sections = _parse_changelog_for_merge(source_text)
+    dest_sections = _parse_changelog_for_merge(dest_text)
+
+    # Build index of existing PR numbers per section in dest
+    dest_prs: dict[str, set[int]] = {}
+    for section_name, entries in dest_sections:
+        dest_prs[section_name] = {e["pr"] for e in entries if e["pr"]}
+
+    # Find new entries from source
+    changed = False
+    for section_name, source_entries in source_sections:
+        existing_prs = dest_prs.get(section_name, set())
+        new_entries = [e for e in source_entries if e["pr"] and e["pr"] not in existing_prs]
+        if not new_entries:
+            continue
+        changed = True
+        # Find or create section in dest
+        found = False
+        for i, (name, entries) in enumerate(dest_sections):
+            if name == section_name:
+                for entry in reversed(new_entries):
+                    entries.insert(0, entry)
+                found = True
+                break
+        if not found:
+            dest_sections.append((section_name, new_entries))
+
+    if not changed:
+        return  # Nothing new — keep dest as-is
+
+    # Write merged result
+    lines = []
+    if header:
+        lines.extend([header, ""])
+    for section_name, entries in dest_sections:
+        lines.append(f"## {section_name}")
+        lines.append("")
+        for entry in entries:
+            lines.append(entry["text"])
+            lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    dest.write_text("\n".join(lines))
+
+
+def _parse_changelog_for_merge(text: str) -> list[tuple[str, list[dict]]]:
+    """Parse a changelog into [(section_name, [{"pr": int, "text": str}])]."""
+    sections: list[tuple[str, list[dict]]] = []
+    section_index: dict[str, list[dict]] = {}
+    current_section = ""
+    current_lines: list[str] = []
+    current_pr: int | None = None
+
+    def _flush():
+        if current_lines and current_section:
+            if current_section not in section_index:
+                entries: list[dict] = []
+                sections.append((current_section, entries))
+                section_index[current_section] = entries
+            section_index[current_section].append({
+                "pr": current_pr,
+                "text": "\n".join(current_lines),
+            })
+
+    for line in text.splitlines():
+        if line.startswith("## ") and not line.startswith("### "):
+            _flush()
+            current_lines = []
+            current_pr = None
+            current_section = line[3:].strip()
+            continue
+        if line.startswith("### "):
+            _flush()
+            current_lines = [line]
+            pr_match = re.search(r"PR #(\d+)", line)
+            current_pr = int(pr_match.group(1)) if pr_match else None
+            continue
+        if line.strip() == "---":
+            _flush()
+            current_lines = []
+            current_pr = None
+            continue
+        if current_lines is not None:
+            current_lines.append(line)
+
+    _flush()
+    return sections
 
 
 # ---------------------------------------------------------------------------
