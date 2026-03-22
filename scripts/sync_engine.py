@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,6 +23,15 @@ try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore
+
+
+@dataclass
+class FetchResult:
+    """Result of a PR fetch operation."""
+    prs: list[dict] | None = None   # None = failed
+    error: str | None = None         # Human-readable error message
+    retryable: bool = False          # Whether a retry might help
+
 
 # Files to skip during diff analysis (noise)
 NOISE_PATTERNS = {
@@ -37,8 +47,8 @@ DIFF_BUDGET_PER_PR = 150  # max diff lines per PR
 # PR fetching (multi-platform)
 # ---------------------------------------------------------------------------
 
-def fetch_prs(config: dict, output_dir: Path, lookback: str) -> list[dict] | None:
-    """Fetch merged PRs from the platform. Returns list of PR dicts, or None on failure."""
+def fetch_prs(config: dict, output_dir: Path, lookback: str) -> FetchResult:
+    """Fetch merged PRs from the platform."""
     platform = config.get("platform", "")
 
     if platform == "github":
@@ -49,37 +59,42 @@ def fetch_prs(config: dict, output_dir: Path, lookback: str) -> list[dict] | Non
         return _fetch_bitbucket(config, lookback)
     if platform == "ado":
         return _fetch_ado(config, lookback)
-    return None
+    return FetchResult(error=f"unknown platform: {platform}")
 
 
-def _fetch_github(output_dir: Path, config: dict, lookback: str) -> list[dict] | None:
+def _fetch_github(output_dir: Path, config: dict, lookback: str) -> FetchResult:
     """Read pre-fetched GitHub PRs (already fetched by orchestrator)."""
     prefetch = output_dir / "fetched-prs.json"
     if prefetch.exists():
         try:
             raw = json.loads(prefetch.read_text())
         except (json.JSONDecodeError, ValueError):
-            return None
-        return [_normalize_github_pr(pr) for pr in raw if _in_window(pr.get("mergedAt", ""), lookback)]
+            return FetchResult(error="fetched-prs.json is malformed JSON")
+        prs = [_normalize_github_pr(pr) for pr in raw if _in_window(pr.get("mergedAt", ""), lookback)]
+        return FetchResult(prs=prs)
     # Fallback: fetch directly
     owner = config.get("github", {}).get("owner", "")
     repo = config.get("github", {}).get("repo", "")
     if not owner or not repo:
-        return None
-    result = subprocess.run(
-        ["gh", "pr", "list", "-R", f"{owner}/{repo}", "--state", "merged",
-         "--search", f"merged:>={lookback}",
-         "--json", "number,title,body,mergedAt,mergeCommit,files,author,reviews",
-         "--limit", "1000"],
-        capture_output=True, text=True,
-    )
+        return FetchResult(error="github.owner and github.repo required in config")
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "-R", f"{owner}/{repo}", "--state", "merged",
+             "--search", f"merged:>={lookback}",
+             "--json", "number,title,body,mergedAt,mergeCommit,files,author,reviews",
+             "--limit", "1000"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return FetchResult(error="gh CLI not found. Install: https://cli.github.com/", retryable=False)
     if result.returncode != 0:
-        return None
+        return _classify_cli_error("gh", result)
     try:
         raw = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
-        return None
-    return [_normalize_github_pr(pr) for pr in raw if _in_window(pr.get("mergedAt", ""), lookback)]
+        return FetchResult(error="gh returned malformed JSON")
+    prs = [_normalize_github_pr(pr) for pr in raw if _in_window(pr.get("mergedAt", ""), lookback)]
+    return FetchResult(prs=prs)
 
 
 def _normalize_github_pr(pr: dict) -> dict:
@@ -98,21 +113,24 @@ def _normalize_github_pr(pr: dict) -> dict:
     }
 
 
-def _fetch_gitlab(config: dict, lookback: str) -> list[dict] | None:
+def _fetch_gitlab(config: dict, lookback: str) -> FetchResult:
     project = config.get("gitlab", {}).get("project_path", "")
     if not project:
-        return None
-    result = subprocess.run(
-        ["glab", "mr", "list", "--merged", "-F", "json", "-R", project,
-         "--updated-after", lookback, "--per-page", "100"],
-        capture_output=True, text=True,
-    )
+        return FetchResult(error="gitlab.project_path required in config")
+    try:
+        result = subprocess.run(
+            ["glab", "mr", "list", "--merged", "-F", "json", "-R", project,
+             "--updated-after", lookback, "--per-page", "100"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return FetchResult(error="glab CLI not found. Install: https://gitlab.com/gitlab-org/cli", retryable=False)
     if result.returncode != 0:
-        return None
+        return _classify_cli_error("glab", result)
     try:
         raw = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
-        return None
+        return FetchResult(error="glab returned malformed JSON")
     prs = []
     for mr in raw:
         if not _in_window(mr.get("merged_at", ""), lookback):
@@ -128,15 +146,17 @@ def _fetch_gitlab(config: dict, lookback: str) -> list[dict] | None:
             "files": [],
             "reviews": [],
         })
-    return prs
+    return FetchResult(prs=prs)
 
 
-def _fetch_bitbucket(config: dict, lookback: str) -> list[dict] | None:
+def _fetch_bitbucket(config: dict, lookback: str) -> FetchResult:
     ws = config.get("bitbucket", {}).get("workspace", "")
     repo = config.get("bitbucket", {}).get("repo", "")
     token = os.environ.get("BITBUCKET_TOKEN", "")
-    if not ws or not repo or not token:
-        return None
+    if not ws or not repo:
+        return FetchResult(error="bitbucket.workspace and bitbucket.repo required in config")
+    if not token:
+        return FetchResult(error="BITBUCKET_TOKEN environment variable not set")
     result = subprocess.run(
         ["curl", "-s", "-H", f"Authorization: Bearer {token}",
          f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}"
@@ -144,11 +164,11 @@ def _fetch_bitbucket(config: dict, lookback: str) -> list[dict] | None:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return None
+        return _classify_cli_error("curl", result)
     try:
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
-        return None
+        return FetchResult(error="Bitbucket API returned malformed JSON")
     prs = []
     for pr in data.get("values", []):
         updated = pr.get("updated_on", "")
@@ -165,29 +185,32 @@ def _fetch_bitbucket(config: dict, lookback: str) -> list[dict] | None:
             "files": [],
             "reviews": [],
         })
-    return prs
+    return FetchResult(prs=prs)
 
 
-def _fetch_ado(config: dict, lookback: str) -> list[dict] | None:
+def _fetch_ado(config: dict, lookback: str) -> FetchResult:
     ado = config.get("ado", {})
     org, project = ado.get("org", ""), ado.get("project", "")
     if not org or not project:
-        return None
-    result = subprocess.run(
-        ["az", "repos", "pr", "list", "--org", f"https://dev.azure.com/{org}",
-         "-p", project, "--status", "completed",
-         "--query", "[].{number:pullRequestId, title:title, description:description, "
-                    "author:createdBy.uniqueName, mergedAt:closedDate, "
-                    "mergeCommit:lastMergeCommit.commitId}",
-         "-o", "json"],
-        capture_output=True, text=True,
-    )
+        return FetchResult(error="ado.org and ado.project required in config")
+    try:
+        result = subprocess.run(
+            ["az", "repos", "pr", "list", "--org", f"https://dev.azure.com/{org}",
+             "-p", project, "--status", "completed",
+             "--query", "[].{number:pullRequestId, title:title, description:description, "
+                        "author:createdBy.uniqueName, mergedAt:closedDate, "
+                        "mergeCommit:lastMergeCommit.commitId}",
+             "-o", "json"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return FetchResult(error="az CLI not found. Install: https://learn.microsoft.com/cli/azure/install-azure-cli", retryable=False)
     if result.returncode != 0:
-        return None
+        return _classify_cli_error("az", result)
     try:
         raw = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
-        return None
+        return FetchResult(error="az returned malformed JSON")
     prs = []
     for pr in raw:
         if not _in_window(pr.get("mergedAt", ""), lookback):
@@ -203,7 +226,19 @@ def _fetch_ado(config: dict, lookback: str) -> list[dict] | None:
             "files": [],
             "reviews": [],
         })
-    return prs
+    return FetchResult(prs=prs)
+
+
+def _classify_cli_error(cli_name: str, result: subprocess.CompletedProcess) -> FetchResult:
+    """Classify a CLI error as retryable (network) or permanent (auth, config)."""
+    stderr = (result.stderr or "").strip()[:200]
+    lower = stderr.lower()
+    retryable = any(w in lower for w in ("timeout", "connection", "network", "temporary", "503", "502"))
+    return FetchResult(
+        error=f"{cli_name} failed (exit {result.returncode}): {stderr}" if stderr
+              else f"{cli_name} failed (exit {result.returncode})",
+        retryable=retryable,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -672,10 +707,11 @@ def deterministic_sync(
     feature_name = config.get("feature_name", "Feature")
 
     # Fetch PRs
-    prs = fetch_prs(config, output_dir, lookback)
-    if prs is None:
-        _write_partial_report(output_dir, today, feature_name)
+    result = fetch_prs(config, output_dir, lookback)
+    if result.prs is None:
+        _write_partial_report(output_dir, today, feature_name, result.error)
         return True  # Partial is still a success (graceful degradation)
+    prs = result.prs
 
     # Filter to team members
     prs = filter_team_prs(prs, config)
@@ -715,13 +751,14 @@ def deterministic_sync(
     return True
 
 
-def _write_partial_report(output_dir: Path, today: str, feature_name: str) -> None:
+def _write_partial_report(output_dir: Path, today: str, feature_name: str, error: str | None = None) -> None:
     """Write a partial report when platform is unavailable."""
+    reason = f"Platform unavailable: {error}" if error else "Platform unavailable — skipped"
     (output_dir / "daily-report.md").write_text(
         f"---\ndate: {today}\nsync_status: partial\npr_count: 0\n"
         f"feature_prs: 0\nowner_reviews: 0\nowner_authored: 0\nanomaly_count: 0\n---\n"
-        f"# Work Report — {today}\n\n## Team PRs\nPlatform unavailable — skipped\n\n"
-        f"## Owner Activity\nPlatform unavailable — skipped\n"
+        f"# Work Report — {today}\n\n## Team PRs\n{reason}\n\n"
+        f"## Owner Activity\n{reason}\n"
     )
 
 
