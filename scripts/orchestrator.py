@@ -311,23 +311,23 @@ class Orchestrator:
 
     def _clean_intermediate_files(self) -> None:
         for f in INTERMEDIATE_FILES:
-            (self.output_dir / f).unlink(missing_ok=True)
-        source_ctx = self.output_dir / "source-context"
+            self.storage.delete(f)
+        source_ctx = self.storage.resolve_path("source-context")
         if source_ctx.exists():
             shutil.rmtree(source_ctx)
-        for bak in self.output_dir.glob("changelog-*.md.bak"):
-            bak.unlink()
+        for bak in self.storage.glob_names("changelog-*.md.bak"):
+            self.storage.delete(bak)
 
     # -- Date computation --
 
     def _compute_lookback_dates(self) -> str:
         """Compute and write current-date.txt + lookback-date.txt. Returns lookback date."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        (self.output_dir / "current-date.txt").write_text(today)
+        self.storage.write("current-date.txt", today)
 
-        last_run_file = self.output_dir / "last-successful-run"
-        if last_run_file.exists():
-            lookback = last_run_file.read_text().strip()[:10]
+        last_run = self.storage.read("last-successful-run")
+        if last_run is not None:
+            lookback = last_run.strip()[:10]
             if lookback > today:
                 self.logger.log(
                     f"WARN: last-successful-run ({lookback}) is in the future. "
@@ -337,7 +337,7 @@ class Orchestrator:
         else:
             lookback = _yesterday()
 
-        (self.output_dir / "lookback-date.txt").write_text(lookback)
+        self.storage.write("lookback-date.txt", lookback)
         return lookback
 
     # -- Call 1: Sync (deterministic, with LLM fallback) --
@@ -345,7 +345,7 @@ class Orchestrator:
     def _run_sync(self) -> bool:
         # Try deterministic sync first (no LLM needed)
         ok = deterministic_sync(self.config, self.output_dir, self.repo_dir)
-        if ok and (self.output_dir / "daily-report.md").exists():
+        if ok and self.storage.exists("daily-report.md"):
             self.status["sync"] = "success"
             self.logger.log("SYNC SUCCESS")
             self.logger.metric("sync", "success")
@@ -361,20 +361,20 @@ class Orchestrator:
 
     def _run_sync_llm(self) -> bool:
         """LLM-based sync fallback (e.g., telemetry queries, ADO MCP tools)."""
-        prompt_path = self.output_dir / "sync-prompt.md"
-        if not prompt_path.exists():
+        prompt = self.storage.read("sync-prompt.md")
+        if prompt is None:
             self.logger.log("SYNC FAILED — no sync-prompt.md and deterministic sync failed")
             self.logger.metric("sync", "failed", 1)
             return False
 
         rc, output = self.runner.run(
-            prompt=prompt_path.read_text(),
+            prompt=prompt,
             allowed_tools=self.sync_tools,
             add_dirs=[str(self.output_dir)],
             working_dir=str(self.repo_dir),
         )
 
-        if rc == 0 and (self.output_dir / "daily-report.md").exists():
+        if rc == 0 and self.storage.exists("daily-report.md"):
             self.status["sync"] = "success"
             self.logger.log("SYNC SUCCESS (LLM fallback)")
             self.logger.metric("sync", "success", rc)
@@ -388,19 +388,19 @@ class Orchestrator:
     def _run_match_helper(self) -> None:
         """Run match-helper to create resolved-mappings.md (stdout capture)."""
         helper = self.scripts_dir / "match-helper.py"
-        if not helper.exists() or not (self.output_dir / "daily-report.md").exists():
+        if not helper.exists() or not self.storage.exists("daily-report.md"):
             return
         result = subprocess.run(
             [
                 "python3", str(helper),
-                str(self.output_dir / "config.yaml"),
+                str(self.storage.resolve_path("config.yaml")),
                 "--resolve-report",
-                str(self.output_dir / "daily-report.md"),
+                str(self.storage.resolve_path("daily-report.md")),
             ],
             capture_output=True, text=True,
         )
         if result.returncode == 0:
-            (self.output_dir / "resolved-mappings.md").write_text(result.stdout)
+            self.storage.write("resolved-mappings.md", result.stdout)
         else:
             self.logger.log("WARN: match-helper failed (file-to-section mappings unavailable)")
 
@@ -415,12 +415,12 @@ class Orchestrator:
     # -- Call 2: Drift --
 
     def _run_drift(self) -> None:
-        prompt_path = self.output_dir / "drift-prompt.md"
-        if not prompt_path.exists():
+        prompt = self.storage.read("drift-prompt.md")
+        if prompt is None:
             return
 
         rc, output = self.runner.run(
-            prompt=prompt_path.read_text(),
+            prompt=prompt,
             allowed_tools="Read,Write",
             add_dirs=[str(self.output_dir)],
             working_dir=str(self.repo_dir),
@@ -446,8 +446,8 @@ class Orchestrator:
     # -- Call 3: Suggest pipeline --
 
     def _run_suggest_pipeline(self) -> None:
-        prompt_path = self.output_dir / "suggest-prompt.md"
-        if not prompt_path.exists():
+        prompt = self.storage.read("suggest-prompt.md")
+        if prompt is None:
             return
 
         # Pre-compute suggest dedup
@@ -465,12 +465,13 @@ class Orchestrator:
         )
 
         # Back up changelogs
-        for f in self.output_dir.glob("changelog-*.md"):
-            shutil.copy2(f, str(f) + ".bak")
+        for name in self.storage.glob_names("changelog-*.md"):
+            src = self.storage.resolve_path(name)
+            shutil.copy2(src, str(src) + ".bak")
 
         # Call 3: Suggest
         rc, output = self.runner.run(
-            prompt=prompt_path.read_text(),
+            prompt=prompt,
             allowed_tools="Read,Write",
             add_dirs=[str(self.output_dir)],
             working_dir=str(self.repo_dir),
@@ -494,10 +495,9 @@ class Orchestrator:
             self.logger,
         )
 
-        if (self.output_dir / "drift-suggestions.md").exists():
-            text = (self.output_dir / "drift-suggestions.md").read_text()
-            if "Verified: NO" in text:
-                self.logger.log("SUGGEST WARNING: some suggestions are UNVERIFIED")
+        suggestions_text = self.storage.read("drift-suggestions.md")
+        if suggestions_text and "Verified: NO" in suggestions_text:
+            self.logger.log("SUGGEST WARNING: some suggestions are UNVERIFIED")
 
         # Deterministic verification (Python, not LLM)
         _run_helper(
@@ -505,7 +505,7 @@ class Orchestrator:
             ["verify-finds", str(self.output_dir), str(self.repo_dir)],
             self.logger,
         )
-        if (self.output_dir / "source-context").exists():
+        if self.storage.resolve_path("source-context").exists():
             _run_helper(
                 self.scripts_dir, "verify-helper.py",
                 ["verify-replaces", str(self.output_dir), str(self.repo_dir)],
@@ -523,16 +523,16 @@ class Orchestrator:
             return
         if not _has_confident_suggestions(self.output_dir):
             return
-        variation_path = self.output_dir / "verify-variation.md"
-        suggest_path = self.output_dir / "suggest-prompt.md"
-        if not variation_path.exists() or not suggest_path.exists():
+        variation = self.storage.read("verify-variation.md")
+        suggest_prompt = self.storage.read("suggest-prompt.md")
+        if variation is None or suggest_prompt is None:
             return
 
         rc, _ = self.runner.run(
-            prompt=suggest_path.read_text(),
+            prompt=suggest_prompt,
             allowed_tools="Read,Write",
             add_dirs=[str(self.output_dir)],
-            append_system=variation_path.read_text(),
+            append_system=variation,
             model="opus",
             working_dir=str(self.repo_dir),
         )
@@ -551,9 +551,9 @@ class Orchestrator:
 
         if read_config_key(self.config, "auto_pr.enabled") != "true":
             return
-        if not (self.output_dir / "drift-suggestions.md").exists():
+        if not self.storage.exists("drift-suggestions.md"):
             return
-        if _suggestion_count_zero(self.output_dir):
+        if _suggestion_count_zero(self.output_dir):  # uses standalone fn (reads file)
             return
 
         result = deterministic_apply(self.config, self.output_dir, self.repo_dir)
@@ -571,14 +571,14 @@ class Orchestrator:
 
     def _run_apply_llm(self) -> None:
         """LLM-based apply fallback."""
-        prompt_path = self.output_dir / "apply-prompt.md"
-        if not prompt_path.exists():
+        prompt = self.storage.read("apply-prompt.md")
+        if prompt is None:
             self.logger.log("APPLY FAILED — no apply-prompt.md and deterministic apply failed")
             self.logger.metric("apply", "failed", 1)
             return
 
         rc, output = self.runner.run(
-            prompt=prompt_path.read_text(),
+            prompt=prompt,
             allowed_tools=self.apply_tools,
             add_dirs=[str(self.output_dir), str(self.repo_dir)],
             working_dir=str(self.repo_dir),
@@ -616,12 +616,12 @@ class Orchestrator:
         if self.status["sync"] != "success" or self.status["drift"] == "failed":
             return
 
-        context_path = self.output_dir / "drift-context.json"
         relevant_count = 0
         pr_count = 0
-        if context_path.exists():
+        context_text = self.storage.read("drift-context.json")
+        if context_text:
             try:
-                data = json.loads(context_path.read_text())
+                data = json.loads(context_text)
                 relevant_count = data.get("summary", {}).get("relevant_count", 0)
                 pr_count = data.get("summary", {}).get("pr_count", 0)
             except (json.JSONDecodeError, ValueError):
@@ -629,7 +629,7 @@ class Orchestrator:
 
         if relevant_count > 0 or pr_count == 0:
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            (self.output_dir / "last-successful-run").write_text(ts)
+            self.storage.write("last-successful-run", ts)
         else:
             self.logger.log(
                 f"WARN: {pr_count} PRs found, 0 relevant. Timestamp not advanced."
