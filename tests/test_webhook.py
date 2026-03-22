@@ -35,6 +35,7 @@ except ImportError:
 # Signature and normalization functions are pure Python — import directly
 # to test them even without fastapi installed.
 from webhook_server import (
+    app,
     normalize_bitbucket_pr,
     normalize_github_pr,
     normalize_gitlab_mr,
