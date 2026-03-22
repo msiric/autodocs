@@ -805,6 +805,65 @@ def run_structural_scan(
 
 
 # ---------------------------------------------------------------------------
+# Concurrency lock
+# ---------------------------------------------------------------------------
+
+LOCK_STALE_SECONDS = 7200  # 2 hours
+
+
+class PipelineLock:
+    """Directory-based lock preventing concurrent pipeline runs.
+
+    Uses mkdir (atomic on all filesystems). Detects and removes stale locks
+    from crashed processes (older than LOCK_STALE_SECONDS).
+    """
+
+    def __init__(self, output_dir: Path, lock_name: str = ".sync.lock"):
+        self.lock_dir = output_dir / lock_name
+        self.acquired = False
+
+    def acquire(self, logger: Logger) -> bool:
+        """Try to acquire the lock. Returns True if acquired, False if busy."""
+        try:
+            self.lock_dir.mkdir()
+            self.acquired = True
+            return True
+        except FileExistsError:
+            # Check for stale lock
+            try:
+                import time
+                age = time.time() - self.lock_dir.stat().st_mtime
+            except OSError:
+                age = 0
+            if age > LOCK_STALE_SECONDS:
+                logger.log(f"WARN: Removing stale lock ({int(age)}s old)")
+                try:
+                    self.lock_dir.rmdir()
+                    self.lock_dir.mkdir()
+                    self.acquired = True
+                    return True
+                except OSError:
+                    pass
+            logger.log("SKIPPED — another sync is running")
+            return False
+
+    def release(self) -> None:
+        """Release the lock."""
+        if self.acquired:
+            try:
+                self.lock_dir.rmdir()
+            except OSError:
+                pass
+            self.acquired = False
+
+    def __enter__(self) -> "PipelineLock":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.release()
+
+
+# ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 
@@ -852,12 +911,33 @@ def main() -> None:
 
     runner = create_runner(config)
 
+    # Acquire pipeline lock (prevents concurrent runs from cron + webhook)
+    lock_name = ".scan.lock" if args.structural_scan else ".sync.lock"
+    lock = PipelineLock(output_dir, lock_name)
+    if not lock.acquire(logger):
+        return
+
+    try:
+        _run_with_lock(args, output_dir, repo_dir, config, runner, logger, scripts_dir)
+    finally:
+        lock.release()
+
+
+def _run_with_lock(
+    args: argparse.Namespace,
+    output_dir: Path,
+    repo_dir: Path,
+    config: dict,
+    runner: LLMRunner,
+    logger: Logger,
+    scripts_dir: Path,
+) -> None:
+    """Pipeline execution (called with lock held)."""
     # Structural scan mode
     if args.structural_scan:
         if not runner.check_auth(str(repo_dir)):
             logger.log("SCAN AUTH FAILED — aborting")
             sys.exit(1)
-        logger.rotate()
         run_structural_scan(output_dir, repo_dir, runner, logger)
         return
 

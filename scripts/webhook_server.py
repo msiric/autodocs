@@ -133,7 +133,7 @@ NORMALIZERS = {
 def trigger_pipeline(output_dir: str, repo_dir: str) -> None:
     """Run the orchestrator as a subprocess.
 
-    Uses the existing .sync.lock mechanism for concurrency control.
+    The orchestrator acquires its own .sync.lock to prevent concurrent runs.
     """
     scripts_dir = Path(output_dir) / "scripts"
     if not (scripts_dir / "orchestrator.py").exists():
