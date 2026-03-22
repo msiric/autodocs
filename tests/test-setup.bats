@@ -187,35 +187,85 @@ EOF
 # setup.sh can't be sourced without running the interactive flow)
 # ============================================================
 
+# Reusable detection functions (must match setup.sh)
+_detect_platform() {
+  local remote
+  remote=$(cd "$1" && git remote get-url origin 2>/dev/null) || return 1
+  case "$remote" in
+    *github.com[:/]*)                                echo "github" ;;
+    *gitlab.com[:/]*|*gitlab.*[:/]*)                 echo "gitlab" ;;
+    *bitbucket.org[:/]*)                             echo "bitbucket" ;;
+    *dev.azure.com*|*visualstudio.com*)              echo "ado" ;;
+    *)                                               return 1 ;;
+  esac
+}
+
+_detect_owner_repo() {
+  local remote
+  remote=$(cd "$1" && git remote get-url origin 2>/dev/null) || return 1
+  echo "$remote" | sed -E 's|^[^:]+://[^/]+/||; s|^[^:]+:||; s|\.git$||'
+}
+
 @test "detect_platform extracts github from remote" {
   (cd "$TEST_DIR/repo" && git remote add origin https://github.com/user/repo.git 2>/dev/null)
-  detect_platform() {
-    local remote
-    remote=$(cd "$1" && git remote get-url origin 2>/dev/null) || return 1
-    case "$remote" in
-      *github.com*) echo "github" ;; *gitlab*) echo "gitlab" ;;
-      *bitbucket*) echo "bitbucket" ;; *dev.azure.com*|*visualstudio.com*) echo "ado" ;;
-      *) return 1 ;;
-    esac
-  }
-  result=$(detect_platform "$TEST_DIR/repo")
+  result=$(_detect_platform "$TEST_DIR/repo")
   [ "$result" = "github" ]
 }
 
 @test "detect_platform extracts gitlab from remote" {
   rm -rf "$TEST_DIR/repo/.git"
   (cd "$TEST_DIR/repo" && git init -q && git remote add origin https://gitlab.com/group/repo.git 2>/dev/null)
-  detect_platform() {
-    local remote
-    remote=$(cd "$1" && git remote get-url origin 2>/dev/null) || return 1
-    case "$remote" in
-      *github.com*) echo "github" ;; *gitlab*) echo "gitlab" ;;
-      *bitbucket*) echo "bitbucket" ;; *dev.azure.com*|*visualstudio.com*) echo "ado" ;;
-      *) return 1 ;;
-    esac
-  }
-  result=$(detect_platform "$TEST_DIR/repo")
+  result=$(_detect_platform "$TEST_DIR/repo")
   [ "$result" = "gitlab" ]
+}
+
+@test "detect_platform extracts self-hosted gitlab" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin git@gitlab.mycompany.com:team/repo.git 2>/dev/null)
+  result=$(_detect_platform "$TEST_DIR/repo")
+  [ "$result" = "gitlab" ]
+}
+
+@test "detect_platform does not false-positive on gitlab in path" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin https://github.com/user/my-gitlab-migration.git 2>/dev/null)
+  result=$(_detect_platform "$TEST_DIR/repo")
+  [ "$result" = "github" ]
+}
+
+@test "detect_owner_repo parses HTTPS github URL" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin https://github.com/msiric/autodocs.git 2>/dev/null)
+  result=$(_detect_owner_repo "$TEST_DIR/repo")
+  [ "$result" = "msiric/autodocs" ]
+}
+
+@test "detect_owner_repo parses SSH github URL" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin git@github.com:msiric/autodocs.git 2>/dev/null)
+  result=$(_detect_owner_repo "$TEST_DIR/repo")
+  [ "$result" = "msiric/autodocs" ]
+}
+
+@test "detect_owner_repo parses URL without .git suffix" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin https://github.com/msiric/autodocs 2>/dev/null)
+  result=$(_detect_owner_repo "$TEST_DIR/repo")
+  [ "$result" = "msiric/autodocs" ]
+}
+
+@test "detect_owner_repo parses nested gitlab groups" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin https://gitlab.com/group/subgroup/repo.git 2>/dev/null)
+  result=$(_detect_owner_repo "$TEST_DIR/repo")
+  [ "$result" = "group/subgroup/repo" ]
+}
+
+@test "detect_owner_repo parses bitbucket SSH URL" {
+  rm -rf "$TEST_DIR/repo/.git"
+  (cd "$TEST_DIR/repo" && git init -q && git remote add origin git@bitbucket.org:workspace/repo.git 2>/dev/null)
+  result=$(_detect_owner_repo "$TEST_DIR/repo")
+  [ "$result" = "workspace/repo" ]
 }
 
 @test "discover_paths extracts code paths from markdown" {

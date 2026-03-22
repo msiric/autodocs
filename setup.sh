@@ -521,19 +521,22 @@ detect_platform() {
   local remote
   remote=$(cd "$1" && git remote get-url origin 2>/dev/null) || return 1
   case "$remote" in
-    *github.com*)                       echo "github" ;;
-    *gitlab*)                           echo "gitlab" ;;
-    *bitbucket*)                        echo "bitbucket" ;;
-    *dev.azure.com*|*visualstudio.com*) echo "ado" ;;
-    *)                                  return 1 ;;
+    *github.com[:/]*)                                echo "github" ;;
+    *gitlab.com[:/]*|*gitlab.*[:/]*)                 echo "gitlab" ;;
+    *bitbucket.org[:/]*)                             echo "bitbucket" ;;
+    *dev.azure.com*|*visualstudio.com*)              echo "ado" ;;
+    *)                                               return 1 ;;
   esac
 }
 
 detect_owner_repo() {
   local remote
   remote=$(cd "$1" && git remote get-url origin 2>/dev/null) || return 1
-  # Handles SSH (git@host:owner/repo.git) and HTTPS (https://host/owner/repo.git)
-  echo "$remote" | sed 's|.*[:/]\([^:]*\)$|\1|' | sed 's|\.git$||'
+  # Strip protocol+host prefix, then .git suffix.
+  # SSH:   git@github.com:owner/repo.git  → owner/repo
+  # HTTPS: https://github.com/owner/repo.git → owner/repo
+  # GitLab nested: https://gitlab.com/group/sub/repo.git → group/sub/repo
+  echo "$remote" | sed -E 's|^[^:]+://[^/]+/||; s|^[^:]+:||; s|\.git$||'
 }
 
 discover_team() {
@@ -586,9 +589,13 @@ fi
 # --- Step 2: Output directory ---
 
 DEFAULT_OUTPUT="$REPO_DIR/.autodocs"
-read -rp "Output directory (default: $DEFAULT_OUTPUT): " OUTPUT_DIR
-OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT}"
-OUTPUT_DIR="${OUTPUT_DIR/#\~/$HOME}"
+if $QUICK_MODE; then
+  OUTPUT_DIR="$DEFAULT_OUTPUT"
+else
+  read -rp "Output directory (default: $DEFAULT_OUTPUT): " OUTPUT_DIR
+  OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT}"
+  OUTPUT_DIR="${OUTPUT_DIR/#\~/$HOME}"
+fi
 mkdir -p "$OUTPUT_DIR"
 
 echo ""
@@ -749,7 +756,15 @@ echo ""
 
 # --- Step 6: Feature name ---
 
-read -rp "Feature/area name (e.g., Channel Pages, Auth, Search): " FEATURE_NAME
+if $QUICK_MODE; then
+  # Infer from repo directory name: my-api-service → My Api Service
+  FEATURE_NAME=$(basename "$REPO_DIR" | sed 's/[-_]/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+else
+  # Suggest inferred name as default
+  DEFAULT_FEATURE=$(basename "$REPO_DIR" | sed 's/[-_]/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+  read -rp "Feature/area name (default: $DEFAULT_FEATURE): " FEATURE_NAME
+  FEATURE_NAME="${FEATURE_NAME:-$DEFAULT_FEATURE}"
+fi
 
 echo ""
 
@@ -757,7 +772,25 @@ echo ""
 
 SELECTED_DOC="" ; DISCOVERED_RELEVANT_PATHS=""
 
-if ! $QUICK_MODE; then
+if $QUICK_MODE; then
+  # Auto-select: largest .md file in docs/ with 3+ section headers (not a changelog)
+  BEST_DOC=""
+  BEST_SECTIONS=0
+  for f in $(cd "$REPO_DIR" && find . -name "*.md" -path "*/docs/*" \
+    -not -name "README.md" -not -name "CHANGELOG.md" -not -name "LICENSE.md" \
+    -not -name "changelog-*" -not -path "*/.git/*" 2>/dev/null); do
+    sections=$(grep -c "^## " "$REPO_DIR/$f" 2>/dev/null || echo 0)
+    if [ "$sections" -gt "$BEST_SECTIONS" ]; then
+      BEST_SECTIONS=$sections
+      BEST_DOC="$f"
+    fi
+  done
+  if [ "$BEST_SECTIONS" -ge 3 ] && [ -n "$BEST_DOC" ]; then
+    SELECTED_DOC=$(echo "$BEST_DOC" | sed 's|^\./||')
+    echo "Auto-selected doc: $SELECTED_DOC ($BEST_SECTIONS sections)"
+    DISCOVERED_RELEVANT_PATHS=$(discover_paths "$REPO_DIR/$SELECTED_DOC" || true)
+  fi
+else
   echo "Looking for documentation files..."
   DOC_FILES=$(cd "$REPO_DIR" && find . -name "*.md" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.autodocs/*" -not -name "README.md" -not -name "CHANGELOG.md" -not -name "LICENSE.md" 2>/dev/null | sort | head -10)
 
