@@ -349,6 +349,11 @@ class Orchestrator:
             self.status["sync"] = "success"
             self.logger.log("SYNC SUCCESS")
             self.logger.metric("sync", "success")
+            if read_config_key(self.config, "telemetry.enabled") == "true":
+                self.logger.log(
+                    "WARN: telemetry (Kusto) requires LLM sync (llm.backend: cli). "
+                    "Deterministic sync does not run Kusto queries."
+                )
             return True
 
         # Fallback to LLM sync (for platforms/configs deterministic sync can't handle)

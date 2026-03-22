@@ -151,6 +151,92 @@ class TestParseSuggestions:
         assert suggestions[0].find_text == "line one\nline two\nline three"
         assert suggestions[0].replace_text == "replaced one\nreplaced two"
 
+    def test_insert_after_with_bare_blockquote(self):
+        """Real LLM output: INSERT AFTER block starts with bare '>' (empty blockquote line)."""
+        md = """## doc.md — Section
+**Triggered by:** PR #1
+**Confidence:** CONFIDENT
+
+### FIND (anchor — insert after this line):
+> anchor text here
+
+### INSERT AFTER:
+>
+> ### New Subsection
+>
+> Content of the new subsection.
+> More content here.
+
+**Verified:** YES
+"""
+        suggestions = parse_suggestions(md)
+        assert len(suggestions) == 1
+        s = suggestions[0]
+        assert s.operation == "INSERT_AFTER"
+        assert "New Subsection" in s.replace_text
+        assert "More content" in s.replace_text
+        assert s.replace_text.startswith("\n")  # empty line from bare >
+
+    def test_real_llm_output_format(self):
+        """Test against the exact format from autodocs-demo output."""
+        md = """---
+date: 2026-03-10
+suggestion_count: 2
+verified: 2/2
+---
+# Suggested Updates — 2026-03-10
+
+## architecture.md — API Endpoints
+**Triggered by:** PR #1 "feat: add auth"
+**Confidence:** CONFIDENT
+
+### FIND (in architecture.md, section "API Endpoints"):
+> The API exposes three endpoints:
+>
+> | Endpoint | Method |
+> |----------|--------|
+> | `/api/users` | GET |
+
+### REPLACE WITH:
+> The API exposes five endpoints:
+>
+> | Endpoint | Method |
+> |----------|--------|
+> | `/api/users` | GET |
+> | `/api/users/:id` | PATCH |
+
+**Verified:** YES — FIND text confirmed in doc
+
+### Reasoning:
+PR #1 added PATCH endpoint.
+
+---
+
+## architecture.md — Authentication
+**Triggered by:** PR #1 "feat: add auth"
+**Confidence:** CONFIDENT
+
+### FIND (anchor — insert after this line):
+> Role hierarchy: admin > member > viewer.
+
+### INSERT AFTER:
+>
+> ### API Key Auth
+>
+> Keys are passed via `X-API-Key` header.
+
+**Verified:** YES — anchor confirmed in doc
+
+### Reasoning:
+PR #1 added API key auth.
+"""
+        suggestions = parse_suggestions(md)
+        assert len(suggestions) == 2
+        assert suggestions[0].operation == "REPLACE"
+        assert "five endpoints" in suggestions[0].replace_text
+        assert suggestions[1].operation == "INSERT_AFTER"
+        assert "API Key Auth" in suggestions[1].replace_text
+
 
 # ---------------------------------------------------------------------------
 # filter_suggestions

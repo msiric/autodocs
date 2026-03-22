@@ -136,10 +136,12 @@ def parse_suggestions(text: str) -> list[Suggestion]:
             operation = "INSERT_AFTER"
             continue
 
-        # Quoted content lines
+        # Quoted content lines ("> text" or bare ">" for empty blockquote lines)
         if in_find:
             if line.startswith("> "):
                 find_lines.append(line[2:])
+            elif line.rstrip() == ">":
+                find_lines.append("")
             elif line.strip() == "":
                 continue
             else:
@@ -149,6 +151,8 @@ def parse_suggestions(text: str) -> list[Suggestion]:
         if in_replace:
             if line.startswith("> "):
                 replace_lines.append(line[2:])
+            elif line.rstrip() == ">":
+                replace_lines.append("")
             elif line.strip() == "":
                 continue
             else:
