@@ -272,6 +272,157 @@ def get_targeted_diffs(
 
 
 # ---------------------------------------------------------------------------
+# Review comment fetching (per-PR, for relevant PRs only)
+# ---------------------------------------------------------------------------
+
+def fetch_review_comments(config: dict, pr_number: int) -> list[dict]:
+    """Fetch review comments for a single PR. Returns list of {body, state, author}."""
+    platform = config.get("platform", "")
+
+    if platform == "github":
+        return _fetch_github_reviews(config, pr_number)
+    if platform == "gitlab":
+        return _fetch_gitlab_notes(config, pr_number)
+    if platform == "bitbucket":
+        return _fetch_bitbucket_comments(config, pr_number)
+    if platform == "ado":
+        return _fetch_ado_threads(config, pr_number)
+    return []
+
+
+def _fetch_github_reviews(config: dict, pr_number: int) -> list[dict]:
+    """Fetch GitHub PR reviews via gh CLI."""
+    owner = config.get("github", {}).get("owner", "")
+    repo = config.get("github", {}).get("repo", "")
+    if not owner or not repo:
+        return []
+    result = subprocess.run(
+        ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+         "--jq", '[.[] | {body, state, author: .user.login}]'],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        raw = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    return [{"body": r.get("body", ""), "state": r.get("state", ""),
+             "author": {"login": r.get("author", "")}} for r in raw]
+
+
+def _fetch_gitlab_notes(config: dict, mr_iid: int) -> list[dict]:
+    """Fetch GitLab MR notes via glab CLI."""
+    project = config.get("gitlab", {}).get("project_path", "")
+    if not project:
+        return []
+    # URL-encode the project path for the API
+    encoded = project.replace("/", "%2F")
+    result = subprocess.run(
+        ["glab", "api", f"projects/{encoded}/merge_requests/{mr_iid}/notes",
+         "--paginate"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        raw = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    reviews = []
+    for note in raw:
+        # Skip system-generated notes (merge notifications, label changes, etc.)
+        if note.get("system", False):
+            continue
+        body = note.get("body", "").strip()
+        if not body:
+            continue
+        author = note.get("author", {})
+        reviews.append({
+            "body": body,
+            "state": "COMMENTED",
+            "author": {"login": author.get("username", "")},
+        })
+    return reviews
+
+
+def _fetch_bitbucket_comments(config: dict, pr_id: int) -> list[dict]:
+    """Fetch Bitbucket PR comments via REST API."""
+    ws = config.get("bitbucket", {}).get("workspace", "")
+    repo = config.get("bitbucket", {}).get("repo", "")
+    token = os.environ.get("BITBUCKET_TOKEN", "")
+    if not ws or not repo or not token:
+        return []
+    result = subprocess.run(
+        ["curl", "-s", "-H", f"Authorization: Bearer {token}",
+         f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}"
+         f"/pullrequests/{pr_id}/comments?pagelen=50"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    reviews = []
+    for comment in data.get("values", []):
+        body = (comment.get("content", {}).get("raw", "") or "").strip()
+        if not body:
+            continue
+        user = comment.get("user", {})
+        reviews.append({
+            "body": body,
+            "state": "COMMENTED",
+            "author": {"login": user.get("nickname", user.get("display_name", ""))},
+        })
+    return reviews
+
+
+def _fetch_ado_threads(config: dict, pr_id: int) -> list[dict]:
+    """Fetch ADO PR threads via az CLI."""
+    ado = config.get("ado", {})
+    org, project = ado.get("org", ""), ado.get("project", "")
+    repo_name = ado.get("repo_id") or ado.get("repo", "")
+    if not org or not project:
+        return []
+    result = subprocess.run(
+        ["az", "repos", "pr", "reviewer", "list", "--id", str(pr_id),
+         "--org", f"https://dev.azure.com/{org}", "-p", project, "-o", "json"],
+        capture_output=True, text=True,
+    )
+    # az CLI doesn't have a direct "list threads" command, use REST via az rest
+    result = subprocess.run(
+        ["az", "rest", "--method", "get",
+         "--uri", f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/"
+                  f"{repo_name}/pullRequests/{pr_id}/threads?api-version=7.1"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    reviews = []
+    for thread in data.get("value", []):
+        for comment in thread.get("comments", []):
+            # Skip system-generated comments
+            if comment.get("commentType") == "system":
+                continue
+            body = (comment.get("content", "") or "").strip()
+            if not body:
+                continue
+            author = comment.get("author", {})
+            reviews.append({
+                "body": body,
+                "state": "COMMENTED",
+                "author": {"login": author.get("displayName", author.get("uniqueName", ""))},
+            })
+    return reviews
+
+
+# ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
 
@@ -543,11 +694,16 @@ def deterministic_sync(
     # Classify
     prs = classify_prs(prs, config)
 
-    # Get diffs for relevant PRs
+    # Get diffs and review threads for relevant PRs
     for pr in prs:
-        if pr.get("classification") in ("YES", "MAYBE") and pr.get("merge_commit"):
+        if pr.get("classification") not in ("YES", "MAYBE"):
+            continue
+        if pr.get("merge_commit"):
             change_types = pr.get("change_types") or []
             pr["diffs"] = get_targeted_diffs(repo_dir, pr["merge_commit"], change_types, config)
+        # Fetch review threads if not already present (GitHub has them from prefetch)
+        if not pr.get("reviews"):
+            pr["reviews"] = fetch_review_comments(config, pr["number"])
 
     # Extract owner activity
     owner_activity = extract_owner_activity(prs, config)
