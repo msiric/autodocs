@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """FastAPI webhook receiver for autodocs.
 
-Receives PR merge webhooks from GitHub/GitLab/Bitbucket, writes fetched-prs.json,
-and triggers the orchestrator pipeline.
+Receives PR merge webhooks from GitHub/GitLab/Bitbucket, writes webhook-prs.json,
+and triggers the orchestrator pipeline. The orchestrator promotes webhook-prs.json
+to fetched-prs.json after cleaning stale intermediate files.
 
 Usage:
   uvicorn webhook_server:app --host 0.0.0.0 --port 8080
@@ -185,14 +186,15 @@ def _register_endpoints(fastapi_app: FastAPI) -> None:
         if pr_data is None:
             return {"status": "ignored", "reason": "not a merge event"}
 
-        # Write fetched-prs.json
+        # Write webhook-prs.json (the orchestrator promotes this to
+        # fetched-prs.json after cleaning stale intermediate files)
         output_dir = os.environ.get("OUTPUT_DIR", "")
         repo_dir = os.environ.get("REPO_DIR", "")
         if not output_dir or not repo_dir:
             raise HTTPException(500, "OUTPUT_DIR and REPO_DIR must be set")
 
         output_path = Path(output_dir)
-        prs_file = output_path / "fetched-prs.json"
+        prs_file = output_path / "webhook-prs.json"
         prs_file.write_text(json.dumps([pr_data], indent=2) + "\n")
 
         # Set lookback to cover this PR

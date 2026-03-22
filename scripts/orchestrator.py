@@ -160,10 +160,11 @@ def _run_helper(scripts_dir: Path, script: str, args: list[str], logger: Logger)
 def _prefetch_github_prs(config: dict, output_dir: Path, lookback_date: str) -> None:
     """Pre-fetch merged PRs for GitHub (deterministic, no LLM).
 
-    Skips if fetched-prs.json already exists (e.g., just provided by a webhook).
+    Skips if fetched-prs.json already exists (promoted from webhook-prs.json
+    by _clean_intermediate_files, or from a test fixture).
     """
     if (output_dir / "fetched-prs.json").exists():
-        return  # Already provided (webhook or recent write)
+        return  # Already provided (webhook promotion or test fixture)
     if read_config_key(config, "platform") != "github":
         return
     owner = read_config_key(config, "github.owner")
@@ -245,8 +246,7 @@ INTERMEDIATE_FILES = [
     "drift-report.md", "suggest-context.json", "drift-suggestions.md",
     "drift-suggestions-verify.md", "verified-suggestions.json",
     "replace-verification.json", "pre-sync-result.json",
-    "current-date.txt", "lookback-date.txt",
-    # fetched-prs.json is cleaned separately — see _clean_intermediate_files
+    "current-date.txt", "lookback-date.txt", "fetched-prs.json",
 ]
 
 
@@ -310,15 +310,15 @@ class Orchestrator:
     def _clean_intermediate_files(self) -> None:
         for f in INTERMEDIATE_FILES:
             self.storage.delete(f)
-        # Clean fetched-prs.json unless it was just written by a webhook
-        # (webhook writes happen before orchestrator starts, so a file
-        # modified within the last 30 seconds is from a webhook trigger)
-        prs_path = self.storage.resolve_path("fetched-prs.json")
-        if prs_path.exists():
-            import time
-            age = time.time() - prs_path.stat().st_mtime
-            if age > 30:
-                self.storage.delete("fetched-prs.json")
+        # If a webhook provided PR data, promote it to fetched-prs.json.
+        # The webhook writes to webhook-prs.json (a separate file) so it
+        # survives the cleanup above. After promotion, _prefetch_github_prs
+        # sees fetched-prs.json exists and skips the gh CLI call.
+        if self.storage.exists("webhook-prs.json"):
+            content = self.storage.read("webhook-prs.json")
+            if content:
+                self.storage.write("fetched-prs.json", content)
+            self.storage.delete("webhook-prs.json")
         source_ctx = self.storage.resolve_path("source-context")
         if source_ctx.exists():
             shutil.rmtree(source_ctx)

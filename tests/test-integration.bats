@@ -147,7 +147,7 @@ No suggestions.
   # Provide pre-fetched PR data for deterministic sync
   # Use a recent date so the PR is within the lookback window
   RECENT=$(date -u -v-1d +"%Y-%m-%dT12:00:00Z" 2>/dev/null || date -u -d "1 day ago" +"%Y-%m-%dT12:00:00Z")
-  cat > "$TEST_DIR/output/fetched-prs.json" <<PREOF
+  cat > "$TEST_DIR/output/webhook-prs.json" <<PREOF
 [{"number":1,"title":"Test PR","body":"","mergedAt":"${RECENT}","mergeCommit":{"oid":"abc123"},"files":[{"path":"src/auth/handler.ts","additions":5,"deletions":2}],"author":{"login":"testuser"},"reviews":[]}]
 PREOF
   # Set lookback to cover the PR
