@@ -800,6 +800,24 @@ fi
 
 echo ""
 
+# --- Step 8b: LLM backend ---
+
+LLM_BACKEND="cli"
+if ! $QUICK_MODE; then
+  echo "LLM backend:"
+  echo "  1. Claude Code CLI (default — requires 'claude' installed)"
+  echo "  2. Anthropic API (requires ANTHROPIC_API_KEY env var)"
+  read -rp "Select (1-2, default: 1): " LLM_CHOICE
+  if [ "${LLM_CHOICE:-1}" = "2" ]; then
+    LLM_BACKEND="api"
+    if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+      echo "  Note: Set ANTHROPIC_API_KEY environment variable before running."
+    fi
+  fi
+fi
+
+echo ""
+
 # --- Step 9: Schedule ---
 
 SCHEDULE_HOUR="17"
@@ -880,6 +898,14 @@ $(if [ -n "$SELECTED_DOC" ]; then
   echo "    repo_path: \"$SELECTED_DOC\""
 else
   echo "# docs: []"
+fi)
+
+$(if [ "$LLM_BACKEND" != "cli" ]; then
+  echo "llm:"
+  echo "  backend: \"$LLM_BACKEND\""
+else
+  echo "# llm:"
+  echo "#   backend: \"cli\"    # \"cli\" (Claude Code) or \"api\" (Anthropic API)"
 fi)
 
 # auto_pr:
