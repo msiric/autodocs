@@ -1,51 +1,51 @@
 # autodocs
 
-Automated documentation drift detection using Claude Code + Azure DevOps.
+Automated documentation drift detection using LLM-powered analysis + deterministic verification.
 
 When your team merges PRs that change code described in your documentation, autodocs detects which doc sections are stale, generates suggested updates, and maintains a changelog of why things changed.
+
+Supports GitHub, GitLab, Bitbucket, and Azure DevOps. Runs via Claude Code CLI or Anthropic API.
 
 ## How it works
 
 ```
-Your repo (git)         GitHub / ADO / GitLab / Bitbucket    Kusto (optional)
+Your repo (git)         GitHub / ADO / GitLab / Bitbucket    LLM (Claude)
      |                       |                                    |
-     |   git diff-tree       |   merged PRs (+ descriptions,      |   telemetry
-     |   (change types,      |      review threads, diffs)        |   (error patterns)
+     |   git diff-tree       |   merged PRs (+ descriptions,      |   drift detection
+     |   (change types,      |      review threads, diffs)        |   + suggestions
      |    A/M/D/R + diffs)   |                                    |
      v                       v                                    v
   +---------------------------------------------------------+
-  |              Claude Code (headless mode)                |
+  |                    autodocs pipeline                     |
   |                                                         |
-  |  Call 1: Sync (daily)                                   |
-  |  - Fetch merged PRs from ADO (with descriptions)        |
+  |  Step 1: Sync (deterministic Python)                    |
+  |  - Fetch merged PRs from platform CLI (gh/glab/curl/az) |
   |  - Get changed files via git diff-tree (local repo)     |
   |  - Fetch PR review threads for relevant PRs             |
-  |  - Classify PRs by path matching                        |
-  |  - Run predefined Kusto queries (if configured)         |
+  |  - Classify PRs by path matching (deterministic)        |
   |  - Write: daily-report.md, activity-log.md              |
   |                                                         |
-  |  Call 2: Drift Detection (daily)                        |
+  |  Step 2: Drift Detection (LLM)                          |
   |  - Read sync output + your doc's file index             |
   |  - Map changed packages to doc sections                 |
   |  - Flag new error patterns not in known list            |
   |  - Detect unmapped files (new code not in docs)         |
   |  - Write: drift-report.md, drift-status.md, drift-log   |
   |                                                         |
-  |  Call 3: Suggest + Changelog (daily, if drift found)    |
+  |  Step 3: Suggest + Changelog (LLM, if drift found)     |
   |  - Read flagged sections from your actual docs          |
   |  - Generate FIND/REPLACE edit suggestions (verified)    |
   |  - Write changelog entries capturing WHY things changed |
   |  - Write: drift-suggestions.md, changelog-<doc>.md      |
   |                                                         |
-  |  Call 3v: Verify (optional, multi-model verification)   |
+  |  Step 3v: Verify (optional, multi-model verification)   |
   |  - Re-run suggest with variant reasoning path           |
   |  - Write: drift-suggestions-verify.md                   |
   |                                                         |
-  |  Call 4: Apply as PR (optional, if suggestions agreed)  |
-  |  - Compare primary + verify suggestions                 |
-  |  - Apply only AGREED suggestions to doc files           |
+  |  Step 4: Apply as PR (deterministic Python)             |
+  |  - Apply FIND/REPLACE to doc files (verified only)      |
   |  - Create branch, commit changes + changelog            |
-  |  - Open pull request in ADO (with work item link)       |
+  |  - Open pull request via platform CLI                   |
   |                                                         |
   |  Weekly: Structural Scan (Saturday)                     |
   |  - Verify every file referenced in docs still exists    |
@@ -53,6 +53,8 @@ Your repo (git)         GitHub / ADO / GitLab / Bitbucket    Kusto (optional)
   |  - Write: structural-report.md                          |
   +---------------------------------------------------------+
 ```
+
+The LLM is only used for steps 2 and 3 (drift detection and suggestion generation) — tasks that genuinely need natural language understanding. Everything else is deterministic Python: PR fetching, classification, verification, edit application, git operations, and PR creation.
 
 ## Key innovations
 
@@ -110,8 +112,15 @@ Your repo (git)         GitHub / ADO / GitLab / Bitbucket    Kusto (optional)
 
 ### Prerequisites
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - Git repo checked out locally
+- Python 3.9+
+- LLM backend (one of):
+
+| Backend | Tool | Setup |
+| ------- | ---- | ----- |
+| Claude Code CLI (default) | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Install and run `claude` to authenticate |
+| Anthropic API | `pip install anthropic` | Set `ANTHROPIC_API_KEY` environment variable |
+
 - Platform CLI:
 
 | Platform     | Tool                                                     | Setup                                      |
@@ -119,9 +128,9 @@ Your repo (git)         GitHub / ADO / GitLab / Bitbucket    Kusto (optional)
 | GitHub       | [`gh`](https://cli.github.com/)                          | Install and run `gh auth login`            |
 | GitLab       | [`glab`](https://docs.gitlab.com/cli/)                   | Install and run `glab auth login`          |
 | Bitbucket    | `curl`                                                   | Set `BITBUCKET_TOKEN` environment variable |
-| Azure DevOps | [ADO MCP](https://github.com/microsoft/azure-devops-mcp) | Configure in `.claude/settings.json`       |
+| Azure DevOps | [`az`](https://learn.microsoft.com/cli/azure/)           | Install and run `az login`                 |
 
-- (Optional) [Kusto MCP](https://github.com/nicepkg/kusto-mcp) for telemetry monitoring
+- (Optional) [Kusto MCP](https://github.com/nicepkg/kusto-mcp) for telemetry monitoring (requires Claude Code CLI backend)
 
 ### Setup
 
@@ -159,6 +168,10 @@ docs:
     package_map:
       your-feature: "Architecture"
       your-feature-hooks: "Hooks Reference"
+
+# LLM backend (optional — defaults to Claude Code CLI)
+# llm:
+#   backend: "api"   # Use Anthropic API instead of Claude Code CLI
 ```
 
 ### Run
@@ -187,6 +200,19 @@ launchctl load ~/Library/LaunchAgents/com.autodocs.sync.plist
 # Weekly structural scan (macOS)
 launchctl load ~/Library/LaunchAgents/com.autodocs.structural-scan.plist
 ```
+
+### Webhook (real-time mode)
+
+Instead of scheduled runs, autodocs can process PRs immediately on merge via webhooks:
+
+```bash
+# Start the webhook server
+pip install fastapi uvicorn
+AUTODOCS_WEBHOOK_SECRET=your-secret OUTPUT_DIR=.autodocs REPO_DIR=. \
+  uvicorn scripts.webhook_server:app --port 8080
+```
+
+Then configure your platform to send PR merge webhooks to `http://your-host:8080/webhook/github` (or `/gitlab`, `/bitbucket`).
 
 ## Configuration reference
 
