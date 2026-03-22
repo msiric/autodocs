@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from apply_engine import (
     ApplyResult,
     Suggestion,
+    _clean_llm_artifacts,
     _merge_changelog_into,
     apply_edits,
     build_pr_body,
@@ -449,6 +450,51 @@ class TestBuildPrBody:
     def test_empty(self):
         body = build_pr_body([], [], [], "2026-03-20")
         assert "autodocs" in body
+
+
+# ---------------------------------------------------------------------------
+# LLM artifact cleaning
+# ---------------------------------------------------------------------------
+
+class TestCleanLlmArtifacts:
+    def test_removes_note_lines(self, tmp_path: Path):
+        doc = tmp_path / "test.md"
+        doc.write_text("## Section\n\nReal content.\n\n(Note: this should be removed.)\n\nMore content.\n")
+        _clean_llm_artifacts(doc)
+        result = doc.read_text()
+        assert "Real content" in result
+        assert "More content" in result
+        assert "(Note:" not in result
+
+    def test_collapses_excessive_blank_lines(self, tmp_path: Path):
+        doc = tmp_path / "test.md"
+        doc.write_text("Line one.\n\n\n\n\n\nLine two.\n")
+        _clean_llm_artifacts(doc)
+        result = doc.read_text()
+        assert "Line one" in result
+        assert "Line two" in result
+        # 6 blank lines collapsed to at most 2 (standard markdown paragraph gap)
+        assert "\n\n\n\n" not in result
+
+    def test_removes_duplicate_headers(self, tmp_path: Path):
+        doc = tmp_path / "test.md"
+        doc.write_text("## Section\n\nContent.\n\n## Section\n\nMore content.\n")
+        _clean_llm_artifacts(doc)
+        result = doc.read_text()
+        assert result.count("## Section") == 1
+        assert "Content" in result
+        assert "More content" in result
+
+    def test_preserves_normal_content(self, tmp_path: Path):
+        doc = tmp_path / "test.md"
+        original = "# Title\n\n## Section 1\n\nContent here.\n\n## Section 2\n\nMore content.\n"
+        doc.write_text(original)
+        _clean_llm_artifacts(doc)
+        result = doc.read_text()
+        assert "# Title" in result
+        assert "## Section 1" in result
+        assert "## Section 2" in result
+        assert "Content here" in result
 
 
 # ---------------------------------------------------------------------------

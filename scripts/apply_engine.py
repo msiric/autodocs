@@ -301,6 +301,46 @@ def _replace_normalized(content: str, find: str, replace: str) -> str:
     return re.sub(pattern, replace, content, count=1)
 
 
+def _clean_llm_artifacts(doc_path: Path) -> None:
+    """Remove common LLM artifacts from a modified doc file.
+
+    - Lines that are LLM self-instructions: (Note: ...), (TODO: ...), etc.
+    - Duplicate consecutive section headers (same text within 5 lines)
+    - Excessive blank lines (3+ consecutive → 1)
+    """
+    lines = doc_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    cleaned: list[str] = []
+    prev_blank_count = 0
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Remove LLM self-instruction lines
+        if stripped.startswith("(Note:") and stripped.endswith(")"):
+            continue
+        if stripped.startswith("(TODO:") and stripped.endswith(")"):
+            continue
+
+        # Collapse 3+ blank lines to 1
+        if stripped == "":
+            prev_blank_count += 1
+            if prev_blank_count <= 2:
+                cleaned.append(line)
+            continue
+        else:
+            prev_blank_count = 0
+
+        # Remove duplicate consecutive headers (same header within last 5 lines)
+        if stripped.startswith("#"):
+            recent = cleaned[-5:] if len(cleaned) >= 5 else cleaned
+            if stripped in [r.strip() for r in recent]:
+                continue
+
+        cleaned.append(line)
+
+    doc_path.write_text("\n".join(cleaned) + "\n")
+
+
 def _diagnose_expired(content: str, section: str) -> str:
     """Diagnose why FIND text wasn't found."""
     if section and f"## {section}" in content:
@@ -398,7 +438,7 @@ def _merge_changelog_into(source: Path, dest: Path) -> None:
     if not changed:
         return  # Nothing new — keep dest as-is
 
-    # Write merged result
+    # Write merged result (strip excessive blank lines from entry text)
     lines = []
     if header:
         lines.extend([header, ""])
@@ -406,7 +446,9 @@ def _merge_changelog_into(source: Path, dest: Path) -> None:
         lines.append(f"## {section_name}")
         lines.append("")
         for entry in entries:
-            lines.append(entry["text"])
+            # Collapse 3+ consecutive blank lines to 1 within entry text
+            entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"])
+            lines.append(entry_text)
             lines.append("")
         lines.append("---")
         lines.append("")
@@ -719,6 +761,12 @@ def deterministic_apply(config: dict, output_dir: Path, repo_dir: Path) -> Apply
     expired: list[dict] = []
     if applicable:
         applied, expired = apply_edits(applicable, doc_paths)
+
+    # Post-process: clean LLM artifacts from modified docs
+    for doc_name in {a["doc"] for a in applied}:
+        doc_path = doc_paths.get(doc_name)
+        if doc_path and doc_path.exists():
+            _clean_llm_artifacts(doc_path)
 
     # Copy changelogs
     changelog_paths = copy_changelogs(output_dir, repo_dir, applied, doc_paths)

@@ -346,10 +346,9 @@ class Orchestrator:
         self.storage.write("lookback-date.txt", lookback)
         return lookback
 
-    # -- Call 1: Sync (deterministic, with LLM fallback) --
+    # -- Call 1: Sync (deterministic) --
 
     def _run_sync(self) -> bool:
-        # Try deterministic sync first (no LLM needed)
         ok = deterministic_sync(self.config, self.output_dir, self.repo_dir)
         if ok and self.storage.exists("daily-report.md"):
             self.status["sync"] = "success"
@@ -357,38 +356,13 @@ class Orchestrator:
             self.logger.metric("sync", "success")
             if read_config_key(self.config, "telemetry.enabled") == "true":
                 self.logger.log(
-                    "WARN: telemetry (Kusto) requires LLM sync (llm.backend: cli). "
+                    "WARN: telemetry (Kusto) requires a separate integration. "
                     "Deterministic sync does not run Kusto queries."
                 )
             return True
 
-        # Fallback to LLM sync (for platforms/configs deterministic sync can't handle)
-        return self._run_sync_llm()
-
-    def _run_sync_llm(self) -> bool:
-        """LLM-based sync fallback (e.g., telemetry queries, ADO MCP tools)."""
-        prompt = self.storage.read("sync-prompt.md")
-        if prompt is None:
-            self.logger.log("SYNC FAILED — no sync-prompt.md and deterministic sync failed")
-            self.logger.metric("sync", "failed", 1)
-            return False
-
-        rc, output = self.runner.run(
-            prompt=prompt,
-            allowed_tools=self.sync_tools,
-            add_dirs=[str(self.output_dir)],
-            working_dir=str(self.repo_dir),
-        )
-
-        if rc == 0 and self.storage.exists("daily-report.md"):
-            self.status["sync"] = "success"
-            self.logger.log("SYNC SUCCESS (LLM fallback)")
-            self.logger.metric("sync", "success", rc)
-            return True
-
-        self.logger.log(f"SYNC FAILED (exit {rc})")
-        self.logger.log(_tail(output, 20))
-        self.logger.metric("sync", "failed", rc)
+        self.logger.log("SYNC FAILED")
+        self.logger.metric("sync", "failed", 1)
         return False
 
     def _run_match_helper(self) -> None:
@@ -569,35 +543,10 @@ class Orchestrator:
             if result.pr_number:
                 msg += f", PR #{result.pr_number}"
             self.logger.log(msg)
-            self.logger.metric("apply", "success")
-            return
-
-        # Fallback to LLM apply
-        self._run_apply_llm()
-
-    def _run_apply_llm(self) -> None:
-        """LLM-based apply fallback."""
-        prompt = self.storage.read("apply-prompt.md")
-        if prompt is None:
-            self.logger.log("APPLY FAILED — no apply-prompt.md and deterministic apply failed")
-            self.logger.metric("apply", "failed", 1)
-            return
-
-        rc, output = self.runner.run(
-            prompt=prompt,
-            allowed_tools=self.apply_tools,
-            add_dirs=[str(self.output_dir), str(self.repo_dir)],
-            working_dir=str(self.repo_dir),
-        )
-
-        if rc == 0:
-            self.status["apply"] = "success"
-            self.logger.log("APPLY SUCCESS (LLM fallback)")
         else:
             self.status["apply"] = "failed"
-            self.logger.log(f"APPLY FAILED (exit {rc})")
-            self.logger.log(_tail(output, 10))
-        self.logger.metric("apply", self.status["apply"], rc)
+            self.logger.log(f"APPLY FAILED: {result.error or 'unknown error'}")
+        self.logger.metric("apply", self.status["apply"])
 
     # -- Status --
 
