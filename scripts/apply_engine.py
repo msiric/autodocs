@@ -284,32 +284,16 @@ def _normalize_ws(text: str) -> str:
 
 
 def _replace_normalized(content: str, find: str, replace: str) -> str:
-    """Replace find_text in content using whitespace-normalized matching."""
-    norm_find = _normalize_ws(find)
-    norm_content = _normalize_ws(content)
-    idx = norm_content.find(norm_find)
-    if idx < 0:
+    """Replace find_text in content using whitespace-flexible regex matching.
+
+    Builds a regex from the find text where whitespace runs become \\s+
+    patterns, then replaces the first match in the original content.
+    """
+    tokens = find.split()
+    if not tokens:
         return content
-    # Map normalized index back to original content
-    # Walk original content, tracking normalized position
-    orig_start = orig_end = 0
-    norm_pos = 0
-    in_start = False
-    for i, ch in enumerate(content):
-        if norm_pos == idx and not in_start:
-            orig_start = i
-            in_start = True
-        if norm_pos == idx + len(norm_find):
-            orig_end = i
-            break
-        if ch in " \t\n\r":
-            if norm_pos > 0 and norm_content[norm_pos - 1] != " ":
-                norm_pos += 1
-        else:
-            norm_pos += 1
-    else:
-        orig_end = len(content)
-    return content[:orig_start] + replace + content[orig_end:]
+    pattern = r"\s+".join(re.escape(t) for t in tokens)
+    return re.sub(pattern, replace, content, count=1)
 
 
 def _diagnose_expired(content: str, section: str) -> str:

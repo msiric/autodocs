@@ -248,6 +248,69 @@ class TestApplyEdits:
         assert len(expired) == 1
         assert "EXPIRED" in expired[0]["reason"]
 
+    def test_replace_whitespace_normalized_match(self, tmp_path: Path):
+        """FIND text has different whitespace than doc — triggers normalized path."""
+        doc = tmp_path / "guide.md"
+        # Doc has double space between words; FIND has single space
+        doc.write_text("GET  /api/users  —  Returns all users\n\nMore content.\n")
+        s = Suggestion("guide.md", "API", "REPLACE",
+                        "GET /api/users — Returns all users",
+                        "GET /api/users — Rate limited.",
+                        "CONFIDENT", "YES", "PR #10", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        assert "whitespace-normalized" in applied[0].get("note", "")
+        content = doc.read_text()
+        assert "Rate limited" in content
+        assert "More content" in content
+
+    def test_replace_tab_vs_space(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("Header\n\tindented line\nFooter\n")
+        s = Suggestion("guide.md", "Sec", "REPLACE",
+                        "Header\n    indented line",
+                        "Header\n    new content",
+                        "CONFIDENT", "YES", "", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        assert "Footer" in doc.read_text()
+
+    def test_replace_extra_blank_lines(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("Para one.\n\n\n\nPara two.\n\nPara three.\n")
+        s = Suggestion("guide.md", "Sec", "REPLACE",
+                        "Para one.\n\nPara two.",
+                        "Combined paragraph.",
+                        "CONFIDENT", "YES", "", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        content = doc.read_text()
+        assert "Combined paragraph" in content
+        assert "Para three" in content
+
+    def test_replace_crlf_line_endings(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("Line one\r\nLine two\r\nLine three\r\n")
+        s = Suggestion("guide.md", "Sec", "REPLACE",
+                        "Line one\nLine two",
+                        "Replaced lines",
+                        "CONFIDENT", "YES", "", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        assert "Line three" in doc.read_text()
+
+    def test_replace_regex_special_chars(self, tmp_path: Path):
+        doc = tmp_path / "guide.md"
+        doc.write_text("| Col A | Col B |\n|-------|-------|\n| val1  | val2  |\nFooter\n")
+        s = Suggestion("guide.md", "Sec", "REPLACE",
+                        "| Col A | Col B |\n|-------|-------|",
+                        "| Col A | Col B | Col C |\n|-------|-------|-------|",
+                        "CONFIDENT", "YES", "", "")
+        applied, expired = apply_edits([s], {"guide.md": doc})
+        assert len(applied) == 1
+        assert "Col C" in doc.read_text()
+        assert "Footer" in doc.read_text()
+
     def test_section_removed(self, tmp_path: Path):
         doc = tmp_path / "guide.md"
         doc.write_text("# Guide\n\nNo sections here.\n")
