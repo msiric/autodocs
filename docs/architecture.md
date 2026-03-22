@@ -2,56 +2,55 @@
 
 ## Overview
 
-autodocs runs up to 4 sequential Claude Code headless calls daily, with deterministic Python pre/post-processing between each call. A weekly structural scan runs separately. Each call is independent — downstream failures can't corrupt upstream output.
+autodocs uses 2 LLM calls daily (drift detection + suggestion generation), with deterministic Python handling everything else: PR fetching, classification, verification, edit application, git operations, and PR creation. A weekly structural scan runs separately. Each step is independent — downstream failures can't corrupt upstream output.
 
-The pipeline alternates between deterministic code (Python/bash — reliable, testable) and LLM calls (Claude — for natural language understanding and generation). Every LLM output that affects documentation edits is verified by Python before being applied.
+The LLM is only used for tasks that genuinely need natural language understanding. Every LLM output that affects documentation edits is verified by deterministic Python before being applied.
 
 ```
-launchd/cron/GitHub Actions (daily)
+launchd/cron/GitHub Actions/webhook (daily)
     |
     v
-autodocs-sync.sh
+autodocs-sync.sh → orchestrator.py
     |
-    ├── Lock, auth check, git fetch
-    ├── Compute current-date.txt + lookback-date.txt (bash, deterministic)
-    ├── Pre-fetch merged PRs (bash, platform CLI)
-    ├── Feedback: discover autodocs PRs, check state, detect corrections
-    ├── Stale PR management (Python: warn/close old PRs)
+    ├── Lock (bash), config validation, auth check, git fetch
+    ├── Pre-sync: discover PRs, check state, detect corrections (Python)
     ├── Open PR limit check
     |
-    ├── Call 1: Sync (LLM)
-    |   ├── Read pre-fetched PRs from fetched-prs.json
+    ├── Step 1: Sync (deterministic Python — sync_engine.py)
+    |   ├── Fetch merged PRs via platform CLI (gh/glab/curl/az)
     |   ├── Get changed files via git diff-tree
-    |   ├── Full diffs for mapped files, stat-only for unmapped
+    |   ├── Classify PRs by path matching (deterministic)
+    |   ├── Get targeted diffs for mapped files
+    |   ├── Fetch review threads for relevant PRs
     |   └── Write: daily-report.md, activity-log.md
     |
     ├── match-helper.py      (Python: file → section mapping)
     ├── drift-helper.py      (Python: parse, group, dedup, lifecycle)
     ├── Log match rate metric
     |
-    ├── Call 2: Drift (LLM)
+    ├── Step 2: Drift (LLM — Read/Write tools only)
     |   ├── Read drift-context.json (pre-processed)
     |   └── Write: drift-report.md, drift-status.md, drift-log.md
     |
     ├── drift-helper.py suggest-dedup  (Python: changelog + open PR filtering)
-    ├── Copy mapped source files to source-context/ (bash)
+    ├── Copy mapped source files to source-context/ (Python)
     |
-    ├── Call 3: Suggest (LLM)
+    ├── Step 3: Suggest (LLM — Read/Write tools only)
     |   ├── Read suggest-context.json + source files (ground truth)
     |   ├── Generate FIND/REPLACE with self-verification
     |   └── Write: drift-suggestions.md, changelog-*.md
     |
-    ├── drift-helper.py verify-finds    (Python: FIND text exists in doc?)
-    ├── drift-helper.py verify-replaces (Python: REPLACE values in source?)
+    ├── verify-helper.py verify-finds    (Python: FIND text exists in doc?)
+    ├── verify-helper.py verify-replaces (Python: REPLACE values in source?)
     |   └── Three-tier gating: EVIDENCED → apply, MISMATCH → block, UNVERIFIED → review
     |
     ├── Shadow verify (optional, LLM, log-only — does not gate apply)
     |
-    ├── Call 4: Apply (LLM, optional — if auto_pr enabled + verified suggestions)
-    |   ├── Read verification results (verified-suggestions.json, replace-verification.json)
-    |   ├── Apply only CONFIDENT + FIND-verified + REPLACE-verified suggestions
+    ├── Step 4: Apply (deterministic Python — apply_engine.py)
+    |   ├── Parse and filter suggestions by verification gates
+    |   ├── Apply FIND/REPLACE + INSERT AFTER to doc files
     |   ├── git: create branch, commit, push
-    |   └── Platform: create PR with autodocs label + metadata
+    |   └── Platform CLI: create PR with autodocs label + metadata
     |
     ├── Write sync-status.md + metrics.jsonl
     └── Advance last-successful-run (only if relevant PRs processed)
@@ -59,13 +58,26 @@ autodocs-sync.sh
 launchd/cron/GitHub Actions (weekly, Saturday)
     |
     v
-autodocs-structural-scan.sh
+autodocs-structural-scan.sh → orchestrator.py --structural-scan
     |
     ├── Read reference docs, extract all file paths
     ├── git ls-files: verify each exists, find undocumented files
     ├── Suggest package_map additions
     └── Write: structural-report.md
 ```
+
+## LLM Backend
+
+autodocs supports two LLM backends, configured via `llm.backend` in config.yaml:
+
+- **`cli`** (default): Claude Code CLI (`claude -p`). Supports all tools. Required for telemetry (Kusto).
+- **`api`**: Anthropic API directly. Supports Read/Write tools (drift + suggest). No CLI installation needed.
+
+Since Steps 1 and 4 are deterministic Python, both backends provide full pipeline functionality. The LLM is only invoked for Steps 2 and 3, which only need Read and Write tools.
+
+## Storage Abstraction
+
+The orchestrator uses a `Storage` protocol for file I/O, enabling future migration to S3/database backends. Currently backed by `LocalStorage` (filesystem). Helper scripts still receive filesystem paths via subprocess arguments — they will be migrated to direct function calls when a non-filesystem backend is needed.
 
 ## The git diff-tree Innovation
 
@@ -103,20 +115,21 @@ The approach works for all merge strategies (squash, merge commit, rebase) becau
 
 Each prompt runs as a separate Claude Code invocation with its own allowlist:
 
-| Property | Call 1: Sync | Call 2: Drift | Call 3: Suggest | Call 3v: Verify | Call 4: Apply |
+| Property | Step 1: Sync | Step 2: Drift | Step 3: Suggest | Step 3v: Verify | Step 4: Apply |
 |----------|-------------|---------------|-----------------|-----------------|---------------|
-| Purpose | Fetch PR data | Detect stale sections | Generate FIND/REPLACE | Verify FIND/REPLACE | Apply edits + open PR |
-| Inputs | fetched-prs.json, config | drift-context.json, docs | suggest-context.json, source-context/, docs | drift-suggestions.md, docs | drift-suggestions.md, verification JSONs |
-| Outputs | daily-report.md | drift-report/status/log.md | drift-suggestions.md, changelog | drift-suggestions-verify.md | git branch + PR |
-| Runs when | Always | Call 1 succeeded | HIGH/CRITICAL alerts | multi_model enabled + CONFIDENT suggestions | auto_pr + verified suggestions |
-| Deterministic pre-processing | Pre-fetch PRs, date computation | match-helper, drift-helper pre-process | suggest-dedup, source copy | N/A | verify-finds, verify-replaces |
+| Engine | **Deterministic Python** | LLM (Read/Write) | LLM (Read/Write) | LLM (optional) | **Deterministic Python** |
+| Purpose | Fetch PRs, classify, write report | Detect stale sections | Generate FIND/REPLACE | Verify FIND/REPLACE | Apply edits + open PR |
+| Inputs | Platform CLI + git | drift-context.json, docs | suggest-context.json, source-context/, docs | drift-suggestions.md, docs | drift-suggestions.md, verification JSONs |
+| Outputs | daily-report.md, activity-log.md | drift-report/status/log.md | drift-suggestions.md, changelog | drift-suggestions-verify.md | git branch + PR |
+| Runs when | Always | Step 1 succeeded | HIGH/CRITICAL alerts | multi_model enabled | auto_pr + verified suggestions |
 
 Key properties:
-- Each call can fail without corrupting the others
-- Deterministic Python runs between every call — the LLM never sees unverified data
-- Call 3 reads actual source files (source-context/) as ground truth
-- Call 4 only applies suggestions that pass both FIND and REPLACE verification
-- Shadow verify (Call 3v) runs optionally in a subshell — logs only, never gates apply
+- Each step can fail without corrupting the others
+- Steps 1 and 4 are deterministic Python — no LLM needed, identical results every run
+- Steps 2 and 3 only need Read/Write tools — works with both CLI and API backends
+- Step 3 reads actual source files (source-context/) as ground truth
+- Step 4 only applies suggestions that pass both FIND and REPLACE verification
+- Shadow verify (Step 3v) runs optionally — logs only, never gates apply
 
 The weekly structural scan runs as a completely separate job with its own wrapper and schedule.
 

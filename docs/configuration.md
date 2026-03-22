@@ -257,6 +257,43 @@ stale_pr:
 
 PRs with the `autodocs:keep-open` label are never warned or closed. PRs whose FIND text no longer matches the doc (EXPIRED_FIND) or that are fully superseded by a newer PR are closed immediately without warning.
 
+### `llm`
+
+LLM backend configuration. Defaults to Claude Code CLI.
+
+```yaml
+llm:
+  backend: "cli"                      # "cli" or "api"
+  model: "claude-sonnet-4-20250514"   # Model for API backend (CLI uses its own model)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `backend` | `cli` | `cli` = Claude Code CLI (requires `claude` installed). `api` = Anthropic API (requires `ANTHROPIC_API_KEY` env var and `pip install anthropic`). |
+| `model` | `claude-sonnet-4-20250514` | Model ID for the API backend. Ignored when using CLI. |
+
+Both backends provide full pipeline functionality. Sync and apply are deterministic Python regardless of backend. The LLM is only used for drift detection and suggestion generation (Read/Write tools).
+
+**Note:** Telemetry (Kusto queries) requires `backend: cli` because it needs the Kusto MCP tool.
+
+### `webhook`
+
+Webhook server for real-time PR processing. Optional — requires `pip install fastapi uvicorn`.
+
+```yaml
+webhook:
+  secret: ""     # HMAC secret (set via AUTODOCS_WEBHOOK_SECRET env var)
+  port: 8080
+```
+
+Start the server with:
+```bash
+AUTODOCS_WEBHOOK_SECRET=your-secret OUTPUT_DIR=.autodocs REPO_DIR=. \
+  uvicorn scripts.webhook_server:app --port 8080
+```
+
+Configure your platform to send PR merge webhooks to `http://host:port/webhook/github` (or `/gitlab`, `/bitbucket`).
+
 ## Output Files
 
 autodocs generates these files in the output directory:

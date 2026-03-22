@@ -422,12 +422,6 @@ def _fetch_ado_threads(config: dict, pr_id: int) -> list[dict]:
     if not org or not project:
         return []
     result = subprocess.run(
-        ["az", "repos", "pr", "reviewer", "list", "--id", str(pr_id),
-         "--org", f"https://dev.azure.com/{org}", "-p", project, "-o", "json"],
-        capture_output=True, text=True,
-    )
-    # az CLI doesn't have a direct "list threads" command, use REST via az rest
-    result = subprocess.run(
         ["az", "rest", "--method", "get",
          "--uri", f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/"
                   f"{repo_name}/pullRequests/{pr_id}/threads?api-version=7.1"],

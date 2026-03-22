@@ -304,6 +304,9 @@ cmd_upgrade() {
   mkdir -p "$output_dir/scripts"
   cp "$SCRIPT_DIR/scripts/"*.py "$output_dir/scripts/"
 
+  # Clean up renamed/removed files from previous versions
+  rm -f "$output_dir/scripts/types.py" 2>/dev/null  # renamed to autodocs_types.py
+
   echo ""
   echo "Upgrade complete. Config preserved, all templates and scripts updated."
 }
