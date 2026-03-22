@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -e ".[dev,webhook]"
+
+      - name: Install BATS
+        run: npm install -g bats
+
+      - name: Run pytest
+        run: pytest tests/ -v
+
+      - name: Run BATS
+        run: bats tests/
