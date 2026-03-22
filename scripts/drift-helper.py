@@ -19,7 +19,6 @@ suggest-dedup: Reads drift-status.md, changelog-*.md, feedback/open-prs.json.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from datetime import datetime
@@ -28,9 +27,8 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:
-    # Graceful degradation: write empty context so LLM falls back to its own logic
-    print("Warning: pyyaml not installed", file=sys.stderr)
-    sys.exit(0)
+    print("Error: pyyaml is required. Install: pip3 install pyyaml", file=sys.stderr)
+    sys.exit(2)
 
 UNMAPPED = "UNMAPPED"
 

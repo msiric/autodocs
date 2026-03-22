@@ -15,14 +15,9 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-try:
-    import yaml
-except ImportError:
-    yaml = None  # type: ignore
 
 
 @dataclass
@@ -40,7 +35,18 @@ NOISE_PATTERNS = {
 }
 NOISE_DIRS = {"dist/", "build/", ".next/", "out/", "node_modules/", "vendor/", ".venv/", "__pycache__/"}
 
-DIFF_BUDGET_PER_PR = 150  # max diff lines per PR
+DIFF_BUDGET_PER_PR = 150   # max diff lines per PR
+DESC_MAX_CHARS = 500       # max PR description length
+REVIEW_MAX_CHARS = 200     # max chars per review comment
+REVIEW_MAX_COUNT = 3       # max review comments shown
+REVIEW_SUMMARY_MAX = 500   # max total review summary length
+
+
+def _truncate_desc(text: str) -> str:
+    """Truncate PR description to DESC_MAX_CHARS."""
+    if len(text) <= DESC_MAX_CHARS:
+        return text
+    return text[:DESC_MAX_CHARS] + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +108,7 @@ def _normalize_github_pr(pr: dict) -> dict:
     return {
         "number": pr.get("number", 0),
         "title": _sanitize_title(pr.get("title", "")),
-        "description": body[:500] + ("..." if len(body) > 500 else ""),
+        "description": _truncate_desc(body),
         "author": pr.get("author", {}).get("login", ""),
         "merged_at": pr.get("mergedAt", ""),
         "merge_commit": (pr.get("mergeCommit") or {}).get("oid", ""),
@@ -139,7 +145,7 @@ def _fetch_gitlab(config: dict, lookback: str) -> FetchResult:
         prs.append({
             "number": mr.get("iid", 0),
             "title": _sanitize_title(mr.get("title", "")),
-            "description": desc[:500] + ("..." if len(desc) > 500 else ""),
+            "description": _truncate_desc(desc),
             "author": mr.get("author", {}).get("username", ""),
             "merged_at": mr.get("merged_at", ""),
             "merge_commit": mr.get("merge_commit_sha", ""),
@@ -178,7 +184,7 @@ def _fetch_bitbucket(config: dict, lookback: str) -> FetchResult:
         prs.append({
             "number": pr.get("id", 0),
             "title": _sanitize_title(pr.get("title", "")),
-            "description": desc[:500] + ("..." if len(desc) > 500 else ""),
+            "description": _truncate_desc(desc),
             "author": pr.get("author", {}).get("nickname", ""),
             "merged_at": updated,
             "merge_commit": (pr.get("merge_commit") or {}).get("hash", ""),
@@ -219,7 +225,7 @@ def _fetch_ado(config: dict, lookback: str) -> FetchResult:
         prs.append({
             "number": pr.get("number", 0),
             "title": _sanitize_title(pr.get("title", "")),
-            "description": desc[:500] + ("..." if len(desc) > 500 else ""),
+            "description": _truncate_desc(desc),
             "author": pr.get("author", ""),
             "merged_at": pr.get("mergedAt", ""),
             "merge_commit": pr.get("mergeCommit", ""),
@@ -777,8 +783,8 @@ def _format_review_threads(reviews: list[dict]) -> str:
         if "[bot]" in login or login.endswith("-bot"):
             continue
         # Truncate individual comments
-        if len(body) > 200:
-            body = body[:200] + "..."
+        if len(body) > REVIEW_MAX_CHARS:
+            body = body[:REVIEW_MAX_CHARS] + "..."
         state = r.get("state", "")
         prefix = f"({state}) " if state and state != "COMMENTED" else ""
         human_reviews.append(f"{login}: {prefix}{body}")
@@ -786,12 +792,11 @@ def _format_review_threads(reviews: list[dict]) -> str:
     if not human_reviews:
         return ""
 
-    # Cap at 3 reviews, 500 chars total
-    summary = " | ".join(human_reviews[:3])
-    if len(human_reviews) > 3:
-        summary += f" (+{len(human_reviews) - 3} more)"
-    if len(summary) > 500:
-        summary = summary[:497] + "..."
+    summary = " | ".join(human_reviews[:REVIEW_MAX_COUNT])
+    if len(human_reviews) > REVIEW_MAX_COUNT:
+        summary += f" (+{len(human_reviews) - REVIEW_MAX_COUNT} more)"
+    if len(summary) > REVIEW_SUMMARY_MAX:
+        summary = summary[:REVIEW_SUMMARY_MAX - 3] + "..."
     return summary
 
 

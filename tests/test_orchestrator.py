@@ -162,7 +162,7 @@ class TestComputeChunks:
 class TestLookbackDates:
     def _make_orchestrator(self, output_dir: Path, config: dict) -> Orchestrator:
         """Create a minimal Orchestrator for testing date logic."""
-        from claude_runner import ClaudeRunner
+        from llm_runner import CLIRunner as ClaudeRunner
         logger = Logger(output_dir)
         scripts = Path(__file__).parent.parent / "scripts"
         return Orchestrator(output_dir, output_dir, config, ClaudeRunner(), logger, scripts)
@@ -197,7 +197,7 @@ class TestLookbackDates:
 
 class TestAdvanceTimestamp:
     def _make_orchestrator(self, output_dir: Path, config: dict) -> Orchestrator:
-        from claude_runner import ClaudeRunner
+        from llm_runner import CLIRunner as ClaudeRunner
         logger = Logger(output_dir)
         scripts = Path(__file__).parent.parent / "scripts"
         return Orchestrator(output_dir, output_dir, config, ClaudeRunner(), logger, scripts)

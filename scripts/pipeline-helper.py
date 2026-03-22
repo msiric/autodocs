@@ -103,7 +103,8 @@ def pre_sync(output_dir: str | Path, repo_dir: str | Path, platform: str) -> Non
     log_entries: list[str] = []
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    new_discovered = backfill_discovered(feedback, platform, repo_id)
+    branch_prefix = config.get("auto_pr", {}).get("branch_prefix", "autodocs/")
+    new_discovered = backfill_discovered(feedback, platform, repo_id, branch_prefix)
 
     state_updates, state_log = check_pr_states(feedback, platform, repo_id, today_str)
     log_entries.extend(state_log)

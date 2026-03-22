@@ -25,7 +25,10 @@ def load_data(path: Path) -> list[dict]:
     text = path.read_text().strip()
     if not text:
         return []
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return []
 
 
 def save_data(path: Path, data: list[dict]) -> None:
@@ -105,16 +108,6 @@ def handle_acceptance_rate(data: list[dict]) -> None:
     print(f"{rate:.2f} ({len(merged)} merged, {len(rejected)} rejected, {len(auto_closed)} auto-closed)")
 
 
-def handle_detect_corrections(data: list[dict], args: list[str]) -> None:
-    """Deprecated: correction detection now lives in pipeline-helper.py (_detect_corrections).
-
-    Called automatically during pre-sync. This CLI subcommand is retained for
-    backward compatibility but prints a deprecation notice.
-    """
-    print("detect-corrections has moved to pipeline-helper.py (runs automatically during pre-sync)",
-          file=sys.stderr)
-
-
 def handle_discover(data: list[dict], args: list[str]) -> None:
     """Backfill open-prs.json from platform PR search results (JSON string)."""
     try:
@@ -165,8 +158,6 @@ def main() -> None:
     elif operation == "discover":
         handle_discover(data, args)
         save_data(path, data)
-    elif operation == "detect-corrections":
-        handle_detect_corrections(data, args)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)

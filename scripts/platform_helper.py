@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 STALE_LABEL = "autodocs:stale"
-BRANCH_PREFIX = "autodocs/"
+DEFAULT_BRANCH_PREFIX = "autodocs/"
 
 
 # ---------------------------------------------------------------------------
@@ -61,20 +61,20 @@ def _ado_parts(repo_id: str | None) -> tuple[str, str, str] | None:
 # PR discovery and state checking
 # ---------------------------------------------------------------------------
 
-def discover_prs(platform: str, repo_id: str | None) -> list[dict]:
+def discover_prs(platform: str, repo_id: str | None, branch_prefix: str = DEFAULT_BRANCH_PREFIX) -> list[dict]:
     """Discover existing autodocs PRs not yet tracked."""
     if not repo_id:
         return []
     if platform == "github":
         output = _gh(
-            ["pr", "list", "--search", f"head:{BRANCH_PREFIX} is:open",
+            ["pr", "list", "--search", f"head:{branch_prefix} is:open",
              "--json", "number,createdAt", "--limit", "50"],
             repo_id,
         )
         return _parse_json(output) or []
     if platform == "gitlab":
         output = _run_cli(
-            ["glab", "mr", "list", "-R", repo_id, "--source-branch", BRANCH_PREFIX,
+            ["glab", "mr", "list", "-R", repo_id, "--source-branch", branch_prefix,
              "--state", "opened", "-F", "json", "--per-page", "50"],
         )
         mrs = _parse_json(output) or []
@@ -83,10 +83,12 @@ def discover_prs(platform: str, repo_id: str | None) -> list[dict]:
     if platform == "bitbucket":
         token = os.environ.get("BITBUCKET_TOKEN", "")
         if token:
+            # URL-encode the branch prefix for the query parameter
+            encoded_prefix = branch_prefix.replace("/", "%2F")
             output = _run_cli([
                 "curl", "-s", "-H", f"Authorization: Bearer {token}",
                 f"https://api.bitbucket.org/2.0/repositories/{repo_id}/pullrequests"
-                f"?state=OPEN&q=source.branch.name+%7E+%22autodocs%2F%22&pagelen=50",
+                f"?state=OPEN&q=source.branch.name+%7E+%22{encoded_prefix}%22&pagelen=50",
             ])
             data = _parse_json(output)
             if data and "values" in data:
@@ -99,7 +101,7 @@ def discover_prs(platform: str, repo_id: str | None) -> list[dict]:
             output = _run_cli([
                 "az", "repos", "pr", "list",
                 "--org", org_url, "-p", project,
-                "--source-branch", BRANCH_PREFIX, "--status", "active",
+                "--source-branch", branch_prefix, "--status", "active",
                 "--query", "[].{number:pullRequestId, createdAt:creationDate}",
                 "-o", "json",
             ])
@@ -364,9 +366,9 @@ def _detect_stale_prs(feedback: list[dict], config: dict, repo_dir: str | Path, 
 # Pre-sync feedback operations
 # ---------------------------------------------------------------------------
 
-def backfill_discovered(feedback: list[dict], platform: str, repo_id: str | None) -> int:
+def backfill_discovered(feedback: list[dict], platform: str, repo_id: str | None, branch_prefix: str = DEFAULT_BRANCH_PREFIX) -> int:
     """Discover existing autodocs PRs on the platform and backfill any not yet tracked."""
-    discovered = discover_prs(platform, repo_id)
+    discovered = discover_prs(platform, repo_id, branch_prefix)
     new_count = 0
     for pr in discovered:
         number = pr.get("number")

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -320,8 +321,6 @@ def copy_changelogs(
     doc_paths: dict[str, Path],
 ) -> list[Path]:
     """Copy changelog files alongside edited docs in the repo."""
-    import shutil
-
     copied: list[Path] = []
     docs_with_changes = {a["doc"] for a in applied}
 

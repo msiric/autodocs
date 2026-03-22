@@ -22,8 +22,8 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:
-    print("Warning: pyyaml not installed, skipping verification", file=sys.stderr)
-    sys.exit(0)
+    print("Error: pyyaml is required. Install: pip3 install pyyaml", file=sys.stderr)
+    sys.exit(2)
 
 
 # ---------------------------------------------------------------------------

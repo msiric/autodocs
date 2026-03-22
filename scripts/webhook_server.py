@@ -195,7 +195,15 @@ def _register_endpoints(fastapi_app: FastAPI) -> None:
 
         output_path = Path(output_dir)
         prs_file = output_path / "webhook-prs.json"
-        prs_file.write_text(json.dumps([pr_data], indent=2) + "\n")
+        # Append to existing data (don't overwrite if multiple webhooks fire rapidly)
+        existing = []
+        if prs_file.exists():
+            try:
+                existing = json.loads(prs_file.read_text())
+            except (json.JSONDecodeError, ValueError):
+                existing = []
+        existing.append(pr_data)
+        prs_file.write_text(json.dumps(existing, indent=2) + "\n")
 
         # Set lookback to cover this PR
         merged_at = pr_data.get("mergedAt", "")

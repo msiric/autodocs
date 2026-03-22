@@ -27,8 +27,8 @@ UNMAPPED = "UNMAPPED"
 try:
     import yaml
 except ImportError:
-    print("Warning: pyyaml not installed, returning UNMAPPED for all files", file=sys.stderr)
-    sys.exit(0)
+    print("Error: pyyaml is required. Install: pip3 install pyyaml", file=sys.stderr)
+    sys.exit(2)
 
 
 def load_config(path: Path) -> dict:

@@ -42,27 +42,32 @@ class LocalStorage:
     """Local filesystem storage backed by a base directory."""
 
     def __init__(self, base: Path):
-        self.base = base
+        self.base = base.resolve()
         self.base.mkdir(parents=True, exist_ok=True)
 
+    def _safe_path(self, name: str) -> Path:
+        """Resolve name to a path guaranteed to be within base directory."""
+        path = (self.base / name).resolve()
+        if not (path == self.base or str(path).startswith(str(self.base) + "/")):
+            raise ValueError(f"Path '{name}' resolves outside storage directory")
+        return path
+
     def read(self, name: str) -> str | None:
-        path = self.base / name
+        path = self._safe_path(name)
         if not path.exists():
             return None
         return path.read_text(encoding="utf-8", errors="replace")
 
     def write(self, name: str, content: str) -> None:
-        path = self.base / name
+        path = self._safe_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
 
     def exists(self, name: str) -> bool:
-        return (self.base / name).exists()
+        return self._safe_path(name).exists()
 
     def delete(self, name: str) -> None:
-        path = self.base / name
-        if path.exists():
-            path.unlink()
+        self._safe_path(name).unlink(missing_ok=True)
 
     def glob_names(self, pattern: str) -> list[str]:
         return sorted(
@@ -72,4 +77,4 @@ class LocalStorage:
         )
 
     def resolve_path(self, name: str) -> Path:
-        return self.base / name
+        return self._safe_path(name)
