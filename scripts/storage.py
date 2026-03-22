@@ -6,6 +6,7 @@ Today: local filesystem. Tomorrow: S3, database, or other backends.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Protocol
 
@@ -61,7 +62,12 @@ class LocalStorage:
     def write(self, name: str, content: str) -> None:
         path = self._safe_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+        # Atomic write: write to temp file then rename. os.replace() is
+        # atomic on POSIX when source and destination are on the same
+        # filesystem (guaranteed here since .tmp is in the same directory).
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(content)
+        os.replace(tmp, path)
 
     def exists(self, name: str) -> bool:
         return self._safe_path(name).exists()
