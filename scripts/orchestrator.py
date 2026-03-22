@@ -160,12 +160,12 @@ def _run_helper(scripts_dir: Path, script: str, args: list[str], logger: Logger)
 def _prefetch_github_prs(config: dict, output_dir: Path, lookback_date: str) -> None:
     """Pre-fetch merged PRs for GitHub (deterministic, no LLM).
 
-    Skips if fetched-prs.json already exists (e.g., provided by webhook or test).
+    Skips if fetched-prs.json already exists (e.g., just provided by a webhook).
     """
+    if (output_dir / "fetched-prs.json").exists():
+        return  # Already provided (webhook or recent write)
     if read_config_key(config, "platform") != "github":
         return
-    if (output_dir / "fetched-prs.json").exists():
-        return  # Already provided externally
     owner = read_config_key(config, "github.owner")
     repo = read_config_key(config, "github.repo")
     if not owner or not repo:
@@ -246,9 +246,7 @@ INTERMEDIATE_FILES = [
     "drift-suggestions-verify.md", "verified-suggestions.json",
     "replace-verification.json", "pre-sync-result.json",
     "current-date.txt", "lookback-date.txt",
-    # Note: fetched-prs.json is NOT cleaned — it may be provided externally
-    # (by webhook, test, or a previous prefetch). It gets overwritten by
-    # _prefetch_github_prs if not already present.
+    # fetched-prs.json is cleaned separately — see _clean_intermediate_files
 ]
 
 
@@ -312,6 +310,15 @@ class Orchestrator:
     def _clean_intermediate_files(self) -> None:
         for f in INTERMEDIATE_FILES:
             self.storage.delete(f)
+        # Clean fetched-prs.json unless it was just written by a webhook
+        # (webhook writes happen before orchestrator starts, so a file
+        # modified within the last 30 seconds is from a webhook trigger)
+        prs_path = self.storage.resolve_path("fetched-prs.json")
+        if prs_path.exists():
+            import time
+            age = time.time() - prs_path.stat().st_mtime
+            if age > 30:
+                self.storage.delete("fetched-prs.json")
         source_ctx = self.storage.resolve_path("source-context")
         if source_ctx.exists():
             shutil.rmtree(source_ctx)
