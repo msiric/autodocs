@@ -557,7 +557,7 @@ def merge_changelogs(output_dir: str | Path) -> None:
             bak_path.unlink()
             continue
 
-        # Write merged result
+        # Write merged result (collapse excessive blank lines in entry text)
         lines = []
         if header:
             lines.append(header)
@@ -566,7 +566,8 @@ def merge_changelogs(output_dir: str | Path) -> None:
             lines.append(f"## {section_name}")
             lines.append("")
             for entry in entries:
-                lines.append(entry["text"])
+                entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"])
+                lines.append(entry_text)
                 lines.append("")
             lines.append("---")
             lines.append("")
