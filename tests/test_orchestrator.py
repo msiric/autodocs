@@ -239,6 +239,57 @@ class TestAdvanceTimestamp:
 
 
 # ---------------------------------------------------------------------------
+# Review thread formatting (sync_engine)
+# ---------------------------------------------------------------------------
+
+class TestFormatReviewThreads:
+    def setup_method(self):
+        from sync_engine import _format_review_threads
+        self.format = _format_review_threads
+
+    def test_human_review_included(self):
+        reviews = [{"body": "LGTM, nice error handling", "state": "APPROVED", "author": {"login": "alice"}}]
+        result = self.format(reviews)
+        assert "alice" in result
+        assert "LGTM" in result
+
+    def test_bot_review_excluded(self):
+        reviews = [
+            {"body": "Auto-approved", "state": "APPROVED", "author": {"login": "dependabot[bot]"}},
+            {"body": "Good change", "state": "APPROVED", "author": {"login": "alice"}},
+        ]
+        result = self.format(reviews)
+        assert "dependabot" not in result
+        assert "alice" in result
+
+    def test_empty_body_excluded(self):
+        reviews = [{"body": "", "state": "APPROVED", "author": {"login": "alice"}}]
+        result = self.format(reviews)
+        assert result == ""
+
+    def test_no_reviews(self):
+        assert self.format([]) == ""
+
+    def test_long_comment_truncated(self):
+        reviews = [{"body": "x" * 300, "state": "COMMENTED", "author": {"login": "alice"}}]
+        result = self.format(reviews)
+        assert len(result) < 350  # 200 char truncation + prefix
+
+    def test_multiple_reviews_capped(self):
+        reviews = [
+            {"body": f"Comment {i}", "state": "COMMENTED", "author": {"login": f"user{i}"}}
+            for i in range(5)
+        ]
+        result = self.format(reviews)
+        assert "+2 more" in result
+
+    def test_bot_suffix_excluded(self):
+        reviews = [{"body": "check passed", "state": "APPROVED", "author": {"login": "ci-bot"}}]
+        result = self.format(reviews)
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
 # Logger
 # ---------------------------------------------------------------------------
 

@@ -431,6 +431,11 @@ def write_daily_report(
                     for path, diff_text in diffs.items():
                         lines.append(f"    {diff_text}")
 
+                # Review threads
+                threads_summary = _format_review_threads(pr.get("reviews") or [])
+                if threads_summary:
+                    lines.append(f"  Threads: {threads_summary}")
+
     lines.extend([
         "",
         f"## Owner Activity ({owner_activity['name']})",
@@ -567,6 +572,41 @@ def _write_partial_report(output_dir: Path, today: str, feature_name: str) -> No
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _format_review_threads(reviews: list[dict]) -> str:
+    """Format PR review comments into a concise summary for the daily report.
+
+    Filters out bot reviews and empty bodies. Truncates each comment and
+    caps total output. Returns empty string if no human reviews.
+    """
+    human_reviews = []
+    for r in reviews:
+        body = (r.get("body") or "").strip()
+        if not body:
+            continue
+        author = r.get("author", {})
+        login = author.get("login", "") if isinstance(author, dict) else str(author)
+        # Skip bots (common patterns: name[bot], dependabot, etc.)
+        if "[bot]" in login or login.endswith("-bot"):
+            continue
+        # Truncate individual comments
+        if len(body) > 200:
+            body = body[:200] + "..."
+        state = r.get("state", "")
+        prefix = f"({state}) " if state and state != "COMMENTED" else ""
+        human_reviews.append(f"{login}: {prefix}{body}")
+
+    if not human_reviews:
+        return ""
+
+    # Cap at 3 reviews, 500 chars total
+    summary = " | ".join(human_reviews[:3])
+    if len(human_reviews) > 3:
+        summary += f" (+{len(human_reviews) - 3} more)"
+    if len(summary) > 500:
+        summary = summary[:497] + "..."
+    return summary
+
 
 def _in_window(date_str: str, lookback: str) -> bool:
     """Check if a date string is within the lookback window."""
