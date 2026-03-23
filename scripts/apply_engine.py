@@ -519,13 +519,16 @@ def git_branch_commit_push(
         )
         return result.returncode == 0
 
-    # Check if branch already exists on remote
+    # Check if branch already exists (remote or local)
     result = subprocess.run(
         ["git", "branch", "-r", "--list", f"origin/{branch}"],
         capture_output=True, text=True, cwd=str(repo_dir),
     )
     if result.stdout.strip():
-        return False  # Branch already exists
+        return False  # Branch already exists on remote
+
+    # Delete stale local branch if it exists (leftover from previous run)
+    _git("branch", "-D", branch)
 
     if not _git("checkout", "-b", branch):
         return False
