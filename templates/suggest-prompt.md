@@ -94,6 +94,12 @@ For each suggestion, generate:
 - **REPLACE WITH** or **INSERT AFTER**: The new text. Preserve the doc's existing tone, style, and formatting. Make the minimum change needed. Use backtick-wrapped identifiers for all code references (function names, file paths, error codes, endpoint paths, types, permissions) — e.g., `` `createUser()` ``, `` `src/api/users.ts` ``, `` `/api/users` ``. This enables deterministic verification of your suggestions.
 - **REASONING**: One sentence explaining what changed and why.
 
+**Cross-reference check:** After generating suggestions for a section, scan the rest of the doc for related content that may also need updating:
+- If you updated a subsection, check if the parent section has a **summary count** (e.g., "three endpoints") that is now wrong — generate an additional REPLACE for the count.
+- If you updated a subsection, check if the parent section has a **summary table** that is missing rows for the items you documented — generate an additional INSERT for the missing rows.
+- If you added or renamed files, check the **File Index** section — generate suggestions to add missing files or update renamed paths.
+These cross-reference suggestions should be separate FIND/REPLACE blocks with their own verification.
+
 **Self-verification:** After generating each FIND block, re-read the doc section and verify the FIND text appears as an exact substring. If it does, set **Verified: YES**. If not, adjust the FIND text to match the actual doc. If you still cannot match it exactly, set **Verified: NO** and note the discrepancy.
 
 Rate each suggestion's confidence:
