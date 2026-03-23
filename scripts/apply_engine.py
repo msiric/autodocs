@@ -446,8 +446,7 @@ def _merge_changelog_into(source: Path, dest: Path) -> None:
         lines.append(f"## {section_name}")
         lines.append("")
         for entry in entries:
-            # Collapse 3+ consecutive blank lines to 1 within entry text
-            entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"])
+            entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"]).strip()
             lines.append(entry_text)
             lines.append("")
         lines.append("---")

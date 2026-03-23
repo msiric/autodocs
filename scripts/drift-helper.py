@@ -566,7 +566,7 @@ def merge_changelogs(output_dir: str | Path) -> None:
             lines.append(f"## {section_name}")
             lines.append("")
             for entry in entries:
-                entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"])
+                entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"]).strip()
                 lines.append(entry_text)
                 lines.append("")
             lines.append("---")
