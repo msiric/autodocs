@@ -447,6 +447,8 @@ def _merge_changelog_into(source: Path, dest: Path) -> None:
         lines.append("")
         for entry in entries:
             entry_text = re.sub(r"\n{3,}", "\n\n", entry["text"]).strip()
+            if not entry_text:
+                continue  # skip empty entries (parser artifacts)
             lines.append(entry_text)
             lines.append("")
         lines.append("---")
