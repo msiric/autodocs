@@ -21,7 +21,7 @@ jobs:
         run: pip install -e ".[dev,webhook]"
 
       - name: Install BATS
-        run: npm install -g bats
+        run: sudo apt-get update && sudo apt-get install -y bats
 
       - name: Run pytest
         run: pytest tests/ -v
