@@ -716,8 +716,17 @@ def deterministic_sync(
     # Filter to team members
     prs = filter_team_prs(prs, config)
 
-    # Get change types for each PR (git diff-tree, falling back to API file list)
+    # Classify FIRST using API file paths (no git operations needed).
+    # This is critical for monorepos: classify 200 PRs via string matching,
+    # then only run expensive git operations on the 2-5 relevant ones.
+    prs = classify_prs(prs, config)
+
+    # Git operations only for relevant PRs
     for pr in prs:
+        if pr.get("classification") not in ("YES", "MAYBE"):
+            continue
+
+        # Get change types via git diff-tree (more accurate than API file list)
         if pr.get("merge_commit"):
             pr["change_types"] = get_change_types(repo_dir, pr["merge_commit"])
         # Fallback: use files from platform API if git diff-tree returned nothing
@@ -727,17 +736,12 @@ def deterministic_sync(
                 for f in pr["files"] if f.get("path")
             ]
 
-    # Classify
-    prs = classify_prs(prs, config)
-
-    # Get diffs and review threads for relevant PRs
-    for pr in prs:
-        if pr.get("classification") not in ("YES", "MAYBE"):
-            continue
+        # Get targeted diffs for mapped files
         if pr.get("merge_commit"):
             change_types = pr.get("change_types") or []
             pr["diffs"] = get_targeted_diffs(repo_dir, pr["merge_commit"], change_types, config)
-        # Fetch review threads if not already present (GitHub has them from prefetch)
+
+        # Fetch review threads if not already present
         if not pr.get("reviews"):
             pr["reviews"] = fetch_review_comments(config, pr["number"])
 
