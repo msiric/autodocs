@@ -908,10 +908,13 @@ def deterministic_sync(
 
     relevant_paths = config.get("relevant_paths") or []
 
-    # Primary: git-based discovery (fast, path-filtered, works on all platforms)
-    prs = discover_prs_from_git(repo_dir, relevant_paths, lookback)
+    # Two discovery strategies:
+    # 1. With relevant_paths: git-first discovery (fast, path-filtered)
+    # 2. Without relevant_paths: platform API fetch (all PRs, small repos)
+    prs: list[dict] = []
 
-    if prs:
+    if relevant_paths:
+        prs = discover_prs_from_git(repo_dir, relevant_paths, lookback)
         # Enrich with platform API details (best-effort)
         for pr in prs:
             details = fetch_pr_details(config, pr["number"])
@@ -919,8 +922,9 @@ def deterministic_sync(
                 pr["title"] = details.get("title") or pr["title"]
                 pr["description"] = details.get("description") or pr["description"]
                 pr["author"] = details.get("author") or pr["author"]
-    else:
-        # Fallback: platform API fetch (for shallow clones, rebase merges, etc.)
+
+    if not prs:
+        # Fallback: platform API fetch (no relevant_paths, shallow clone, etc.)
         result = fetch_prs(config, output_dir, lookback)
         if result.prs is None:
             _write_partial_report(output_dir, today, feature_name, result.error)
