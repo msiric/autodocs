@@ -79,10 +79,14 @@ def discover_prs_from_git(
 
     # git log --first-parent: follow only the main branch lineage
     # -- paths: only commits that touched these paths
+    # Use a delimiter to separate commits (body can span multiple lines).
+    # This is needed for GitLab where the MR number is in the body,
+    # not the subject: "See merge request group/project!99"
+    DELIM = "---AUTODOCS-COMMIT---"
     cmd = [
         "git", "log", "--first-parent",
         f"--since={lookback}",
-        "--format=%H %aI %s",  # hash, ISO date, subject
+        f"--format={DELIM}%n%H %aI%n%B",  # delimiter, hash+date, full message
         "--",
     ] + [p.rstrip("/") + "/" for p in relevant_paths]
 
@@ -93,16 +97,27 @@ def discover_prs_from_git(
     prs: list[dict] = []
     seen_numbers: set[int] = set()
 
-    for line in result.stdout.strip().splitlines():
-        if not line:
+    for block in result.stdout.split(DELIM):
+        block = block.strip()
+        if not block:
             continue
-        parts = line.split(" ", 2)
-        if len(parts) < 3:
+        lines = block.splitlines()
+        if not lines:
             continue
-        commit_hash, date_str, subject = parts
 
-        # Extract PR number from commit message
-        pr_number = _extract_pr_number(subject)
+        # First line: hash + date
+        header_parts = lines[0].split(" ", 1)
+        if len(header_parts) < 2:
+            continue
+        commit_hash = header_parts[0]
+        date_str = header_parts[1][:10]  # YYYY-MM-DD
+
+        # Remaining lines: full commit message (subject + body)
+        full_message = "\n".join(lines[1:]) if len(lines) > 1 else ""
+        subject = lines[1] if len(lines) > 1 else ""
+
+        # Extract PR number from full message (checks subject first, then body)
+        pr_number = _extract_pr_number(full_message)
         if not pr_number or pr_number in seen_numbers:
             continue
         seen_numbers.add(pr_number)
@@ -110,7 +125,7 @@ def discover_prs_from_git(
         prs.append({
             "number": pr_number,
             "merge_commit": commit_hash,
-            "merged_at": date_str[:10],  # YYYY-MM-DD
+            "merged_at": date_str,
             "title": _sanitize_title(subject),
             "description": "",
             "author": "",
