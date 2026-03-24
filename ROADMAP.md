@@ -5,10 +5,10 @@
 **Goal:** Any team can go from zero docs to working autodocs in under 5 minutes.
 
 ### `autodocs generate` command
-- [ ] Generate prompt template (`generate-prompt.md`) that reads repo structure and source files, writes a structured architecture doc
-- [ ] Deterministic file discovery + structure analysis (extend `setup.sh analyze`)
-- [ ] Auto-generate `config.yaml` with package_map pre-filled from the doc's sections
-- [ ] Output doc has `## ` sections immediately compatible with maintenance mode
+- [x] Generate prompt template (`generate-prompt.md`) that reads repo structure and source files, writes a structured architecture doc
+- [x] Deterministic file discovery + structure analysis (extend `setup.sh analyze`)
+- [x] Auto-generate `config.yaml` with package_map pre-filled from the doc's sections
+- [x] Output doc has `## ` sections immediately compatible with maintenance mode
 
 **Target onboarding flow:**
 ```bash
@@ -41,6 +41,13 @@ autodocs-now            # first maintenance run
 ## Phase 3: Monorepo support (Weeks 3-4)
 
 **Goal:** autodocs works efficiently in large monorepos where each team tracks their own code.
+
+### Git-first PR discovery (DONE)
+- [x] `git log --first-parent -- relevant_paths/` discovers only relevant PRs from local history
+- [x] Works identically across all 4 platforms (GitHub, ADO, GitLab, Bitbucket)
+- [x] PR number extraction from merge commit messages (all merge strategies)
+- [x] Falls back to platform API when git discovery returns nothing
+- [x] Empty `relevant_paths` falls back to platform API fetch (small repos)
 
 ### Path-based webhook filtering
 - [ ] Webhook server checks changed files against `relevant_paths` before triggering pipeline
@@ -115,6 +122,8 @@ autodocs-now            # first maintenance run
 - [x] Storage abstraction (LocalStorage with atomic writes, path traversal protection)
 - [x] Pipeline lock in Python (protects all entry points)
 - [x] Webhook server (FastAPI, GitHub/GitLab/Bitbucket support)
+- [x] Git-first PR discovery (git log + path filter, all platforms, monorepo-ready)
+- [x] Doc generation from codebase (setup.sh generate, config co-generation)
 
 ### Quality improvements
 - [x] Three-layer verification (LLM self-check + FIND verify + REPLACE verify)
@@ -126,9 +135,9 @@ autodocs-now            # first maintenance run
 - [x] Config schema validation
 
 ### Testing & infrastructure
-- [x] 126 pytest + 249 BATS = 375 tests
+- [x] 153 pytest + 249 BATS = 402 tests
 - [x] CI workflow (GitHub Actions: pytest + BATS on push/PR)
-- [x] End-to-end validated against autodocs-demo repo
+- [x] End-to-end validated against autodocs-demo repo (multiple rounds)
 - [x] pyproject.toml with dependency groups
 - [x] Zero-question `--quick` setup mode with auto-detection
 

@@ -17,9 +17,9 @@ autodocs-sync.sh → orchestrator.py
     ├── Open PR limit check
     |
     ├── Step 1: Sync (deterministic Python — sync_engine.py)
-    |   ├── Fetch merged PRs via platform CLI (gh/glab/curl/az)
+    |   ├── Discover relevant PRs via git log + path filter
+    |   ├── Fetch PR details from platform API (relevant PRs only)
     |   ├── Get changed files via git diff-tree
-    |   ├── Classify PRs by path matching (deterministic)
     |   ├── Get targeted diffs for mapped files
     |   ├── Fetch review threads for relevant PRs
     |   └── Write: daily-report.md, activity-log.md

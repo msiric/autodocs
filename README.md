@@ -19,10 +19,10 @@ Your repo (git)         GitHub / ADO / GitLab / Bitbucket    LLM (Claude)
   |                    autodocs pipeline                     |
   |                                                         |
   |  Step 1: Sync (deterministic Python)                    |
-  |  - Fetch merged PRs from platform CLI (gh/glab/curl/az) |
+  |  - Discover relevant PRs via git log + path filter      |
+  |  - Fetch PR details from platform API (relevant only)   |
   |  - Get changed files via git diff-tree (local repo)     |
   |  - Fetch PR review threads for relevant PRs             |
-  |  - Classify PRs by path matching (deterministic)        |
   |  - Write: daily-report.md, activity-log.md              |
   |                                                         |
   |  Step 2: Drift Detection (LLM)                          |

@@ -14,6 +14,8 @@ All notable changes to autodocs are documented here. Format follows [Keep a Chan
 - **Config schema validation** (`schema_helper.py`) — validates config.yaml structure at pipeline start. Catches platform, docs, auto_pr, and llm config errors.
 - **Pipeline lock in orchestrator** — `PipelineLock` using atomic `mkdir`, protecting all entry points (cron, webhook, direct invocation). Stale lock detection (>2 hours).
 - **Review thread fetching** — fetches PR review comments from all 4 platforms (GitHub API, GitLab notes, Bitbucket comments, ADO threads). Bot reviews filtered.
+- **Git-first PR discovery** — discovers relevant PRs via `git log --first-parent -- relevant_paths/` instead of fetching all PRs from platform API. Works identically across all 4 platforms. Critical for monorepos: 1000 daily merges but 10 relevant → only 10 processed. Falls back to platform API when git discovery returns nothing.
+- **Doc generation** (`generate.py`) — `setup.sh generate` reads a codebase and generates an architecture doc + config.yaml with package_map derived from doc sections. Zero manual doc writing or config editing.
 - **Unit test suite** — 119 pytest tests covering orchestrator logic, apply engine, LLM runner (including mock-based agentic loop), and webhook server.
 - **CI workflow** (`.github/workflows/test.yml`) — runs pytest + BATS on push and PR.
 - **`pyproject.toml`** — dependency manifest with required (`pyyaml`) and optional groups (`api`, `webhook`, `dev`).
