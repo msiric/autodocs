@@ -50,11 +50,196 @@ def _truncate_desc(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PR fetching (multi-platform)
+# PR discovery (git-first, universal across all platforms)
+# ---------------------------------------------------------------------------
+
+# Patterns to extract PR/MR numbers from merge commit messages.
+# Order matters: try most specific patterns first.
+PR_NUMBER_PATTERNS = [
+    re.compile(r"Merge pull request #(\d+)"),      # GitHub merge
+    re.compile(r"Merged PR (\d+)"),                 # ADO (all strategies)
+    re.compile(r"\(pull request #(\d+)\)"),          # Bitbucket
+    re.compile(r"!(\d+)"),                           # GitLab (See merge request ...!NNN)
+    re.compile(r"\(#(\d+)\)"),                       # GitHub squash
+]
+
+
+def discover_prs_from_git(
+    repo_dir: Path,
+    relevant_paths: list[str],
+    lookback: str,
+) -> list[dict]:
+    """Discover merged PRs that touched relevant paths via git log.
+
+    Uses the local git history — works identically across all platforms.
+    Returns [{number, merge_commit, merged_at}] with minimal data.
+    """
+    if not relevant_paths:
+        return []
+
+    # git log --first-parent: follow only the main branch lineage
+    # -- paths: only commits that touched these paths
+    cmd = [
+        "git", "log", "--first-parent",
+        f"--since={lookback}",
+        "--format=%H %aI %s",  # hash, ISO date, subject
+        "--",
+    ] + [p.rstrip("/") + "/" for p in relevant_paths]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_dir))
+    if result.returncode != 0:
+        return []
+
+    prs: list[dict] = []
+    seen_numbers: set[int] = set()
+
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        parts = line.split(" ", 2)
+        if len(parts) < 3:
+            continue
+        commit_hash, date_str, subject = parts
+
+        # Extract PR number from commit message
+        pr_number = _extract_pr_number(subject)
+        if not pr_number or pr_number in seen_numbers:
+            continue
+        seen_numbers.add(pr_number)
+
+        prs.append({
+            "number": pr_number,
+            "merge_commit": commit_hash,
+            "merged_at": date_str[:10],  # YYYY-MM-DD
+            "title": _sanitize_title(subject),
+            "description": "",
+            "author": "",
+            "files": [],
+            "reviews": [],
+        })
+
+    return prs
+
+
+def _extract_pr_number(subject: str) -> int | None:
+    """Extract PR/MR number from a commit message subject line."""
+    for pattern in PR_NUMBER_PATTERNS:
+        m = pattern.search(subject)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
+    """Fetch title, description, author for a single PR from platform API.
+
+    Best-effort: returns None if the CLI is unavailable or the call fails.
+    The pipeline can proceed with git-only data (number, files, diffs).
+    """
+    platform = config.get("platform", "")
+
+    if platform == "github":
+        owner = config.get("github", {}).get("owner", "")
+        repo = config.get("github", {}).get("repo", "")
+        if not owner or not repo:
+            return None
+        result = subprocess.run(
+            ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
+             "--jq", '{title: .title, body: .body, author: .user.login}'],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads(result.stdout)
+            return {
+                "title": _sanitize_title(data.get("title", "")),
+                "description": _truncate_desc(data.get("body") or ""),
+                "author": data.get("author", ""),
+            }
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    if platform == "ado":
+        ado = config.get("ado", {})
+        org, project = ado.get("org", ""), ado.get("project", "")
+        if not org or not project:
+            return None
+        try:
+            result = subprocess.run(
+                ["az", "repos", "pr", "show", "--id", str(pr_number),
+                 "--org", f"https://dev.azure.com/{org}", "-p", project,
+                 "--query", "{title:title, description:description, author:createdBy.uniqueName}",
+                 "-o", "json"],
+                capture_output=True, text=True,
+            )
+        except FileNotFoundError:
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads(result.stdout)
+            return {
+                "title": _sanitize_title(data.get("title", "")),
+                "description": _truncate_desc(data.get("description") or ""),
+                "author": data.get("author", ""),
+            }
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    if platform == "gitlab":
+        project_path = config.get("gitlab", {}).get("project_path", "")
+        if not project_path:
+            return None
+        encoded = project_path.replace("/", "%2F")
+        result = subprocess.run(
+            ["glab", "api", f"projects/{encoded}/merge_requests/{pr_number}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads(result.stdout)
+            return {
+                "title": _sanitize_title(data.get("title", "")),
+                "description": _truncate_desc(data.get("description") or ""),
+                "author": data.get("author", {}).get("username", ""),
+            }
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    if platform == "bitbucket":
+        ws = config.get("bitbucket", {}).get("workspace", "")
+        repo = config.get("bitbucket", {}).get("repo", "")
+        token = os.environ.get("BITBUCKET_TOKEN", "")
+        if not ws or not repo or not token:
+            return None
+        result = subprocess.run(
+            ["curl", "-s", "-H", f"Authorization: Bearer {token}",
+             f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}/pullrequests/{pr_number}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads(result.stdout)
+            return {
+                "title": _sanitize_title(data.get("title", "")),
+                "description": _truncate_desc(data.get("description") or ""),
+                "author": data.get("author", {}).get("nickname", ""),
+            }
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# PR fetching — platform API (fallback when git discovery returns nothing)
 # ---------------------------------------------------------------------------
 
 def fetch_prs(config: dict, output_dir: Path, lookback: str) -> FetchResult:
-    """Fetch merged PRs from the platform."""
+    """Fetch merged PRs from the platform API. Used as fallback."""
     platform = config.get("platform", "")
 
     if platform == "github":
@@ -706,19 +891,31 @@ def deterministic_sync(
     lookback = lookback_file.read_text().strip()
     feature_name = config.get("feature_name", "Feature")
 
-    # Fetch PRs
-    result = fetch_prs(config, output_dir, lookback)
-    if result.prs is None:
-        _write_partial_report(output_dir, today, feature_name, result.error)
-        return True  # Partial is still a success (graceful degradation)
-    prs = result.prs
+    relevant_paths = config.get("relevant_paths") or []
+
+    # Primary: git-based discovery (fast, path-filtered, works on all platforms)
+    prs = discover_prs_from_git(repo_dir, relevant_paths, lookback)
+
+    if prs:
+        # Enrich with platform API details (best-effort)
+        for pr in prs:
+            details = fetch_pr_details(config, pr["number"])
+            if details:
+                pr["title"] = details.get("title") or pr["title"]
+                pr["description"] = details.get("description") or pr["description"]
+                pr["author"] = details.get("author") or pr["author"]
+    else:
+        # Fallback: platform API fetch (for shallow clones, rebase merges, etc.)
+        result = fetch_prs(config, output_dir, lookback)
+        if result.prs is None:
+            _write_partial_report(output_dir, today, feature_name, result.error)
+            return True
+        prs = result.prs
 
     # Filter to team members
     prs = filter_team_prs(prs, config)
 
-    # Classify FIRST using API file paths (no git operations needed).
-    # This is critical for monorepos: classify 200 PRs via string matching,
-    # then only run expensive git operations on the 2-5 relevant ones.
+    # Classify using available file data
     prs = classify_prs(prs, config)
 
     # Git operations only for relevant PRs
@@ -726,10 +923,9 @@ def deterministic_sync(
         if pr.get("classification") not in ("YES", "MAYBE"):
             continue
 
-        # Get change types via git diff-tree (more accurate than API file list)
+        # Get change types via git diff-tree
         if pr.get("merge_commit"):
             pr["change_types"] = get_change_types(repo_dir, pr["merge_commit"])
-        # Fallback: use files from platform API if git diff-tree returned nothing
         if not pr.get("change_types") and pr.get("files"):
             pr["change_types"] = [
                 {"change_type": "M", "path": f["path"]}

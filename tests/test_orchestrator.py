@@ -242,6 +242,46 @@ class TestAdvanceTimestamp:
 # Review thread formatting (sync_engine)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PR number extraction from merge commits (sync_engine)
+# ---------------------------------------------------------------------------
+
+class TestExtractPrNumber:
+    def setup_method(self):
+        from sync_engine import _extract_pr_number
+        self.extract = _extract_pr_number
+
+    def test_github_merge(self):
+        assert self.extract("Merge pull request #42 from owner/branch") == 42
+
+    def test_github_squash(self):
+        assert self.extract("feat: add rate limiting (#123)") == 123
+
+    def test_ado_merge(self):
+        assert self.extract("Merged PR 456: Fix auth handler") == 456
+
+    def test_ado_squash(self):
+        assert self.extract("Merged PR 789: Refactor permissions") == 789
+
+    def test_gitlab_merge(self):
+        assert self.extract("See merge request group/project!99") == 99
+
+    def test_bitbucket_merge(self):
+        assert self.extract("Merged in feat/search (pull request #55)") == 55
+
+    def test_no_pr_number(self):
+        assert self.extract("regular commit without PR") is None
+
+    def test_github_merge_takes_priority_over_squash(self):
+        # If both patterns match, merge pattern should win (more specific)
+        result = self.extract("Merge pull request #10 from owner/branch (#10)")
+        assert result == 10
+
+
+# ---------------------------------------------------------------------------
+# Review thread formatting (sync_engine)
+# ---------------------------------------------------------------------------
+
 class TestFormatReviewThreads:
     def setup_method(self):
         from sync_engine import _format_review_threads
