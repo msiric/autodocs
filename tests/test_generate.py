@@ -11,12 +11,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from generate import (
     build_config,
+    build_file_tree,
     detect_relevant_paths,
     detect_source_dirs,
     discover_source_files,
     extract_sections,
     infer_package_map,
-    read_source_context,
 )
 
 
@@ -82,29 +82,37 @@ class TestDiscoverFiles:
 # read_source_context
 # ---------------------------------------------------------------------------
 
-class TestReadSourceContext:
-    def test_includes_file_tree(self, tmp_path: Path):
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "app.ts").write_text("export function app() {}")
+class TestBuildFileTree:
+    def test_includes_file_paths(self, tmp_path: Path):
+        (tmp_path / "src" / "api").mkdir(parents=True)
+        (tmp_path / "src" / "api" / "users.ts").write_text("export function listUsers() {}")
         files = discover_source_files(tmp_path)
-        context = read_source_context(tmp_path, files)
-        assert "## File tree" in context
-        assert "src/app.ts" in context
+        tree = build_file_tree(files)
+        assert "src/api/users.ts" in tree
 
-    def test_includes_file_content(self, tmp_path: Path):
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "app.ts").write_text("export function app() { return 42; }")
+    def test_groups_by_directory(self, tmp_path: Path):
+        (tmp_path / "src" / "api").mkdir(parents=True)
+        (tmp_path / "src" / "auth").mkdir(parents=True)
+        (tmp_path / "src" / "api" / "users.ts").write_text("line1\nline2\n")
+        (tmp_path / "src" / "auth" / "jwt.ts").write_text("line1\n")
         files = discover_source_files(tmp_path)
-        context = read_source_context(tmp_path, files)
-        assert "export function app()" in context
+        tree = build_file_tree(files)
+        assert "**src/api/**" in tree
+        assert "**src/auth/**" in tree
 
-    def test_respects_token_budget(self, tmp_path: Path):
+    def test_includes_line_counts(self, tmp_path: Path):
         (tmp_path / "src").mkdir()
-        # Create a large file that exceeds a tiny budget
-        (tmp_path / "src" / "big.ts").write_text("x\n" * 10000)
+        (tmp_path / "src" / "app.ts").write_text("a\nb\nc\n")
         files = discover_source_files(tmp_path)
-        context = read_source_context(tmp_path, files, max_tokens=100)
-        assert "truncated" in context.lower() or "Skipped" in context
+        tree = build_file_tree(files)
+        assert "(3 lines)" in tree
+
+    def test_does_not_include_file_content(self, tmp_path: Path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.ts").write_text("export function secretImpl() { return 42; }")
+        files = discover_source_files(tmp_path)
+        tree = build_file_tree(files)
+        assert "secretImpl" not in tree
 
 
 # ---------------------------------------------------------------------------

@@ -53,9 +53,6 @@ SKIP_PATTERNS = {
     ".generated.", ".min.", ".d.ts", ".map",
 }
 
-# Rough tokens-per-line estimate
-TOKENS_PER_LINE = 4
-DEFAULT_MAX_TOKENS = 150_000
 
 
 # ---------------------------------------------------------------------------
@@ -102,52 +99,25 @@ def discover_source_files(
     return files
 
 
-def read_source_context(
-    repo_dir: Path,
-    files: list[dict],
-    max_tokens: int = DEFAULT_MAX_TOKENS,
-) -> str:
-    """Read source files into a context string within token budget."""
-    parts: list[str] = []
-    total_tokens = 0
+def build_file_tree(files: list[dict]) -> str:
+    """Build a file tree string for the prompt. The LLM reads files on demand."""
+    lines = ["### Source files\n"]
 
-    # File tree first (always included)
-    tree = "## File tree\n\n"
+    # Group by top-level directory for readability
+    by_dir: dict[str, list[dict]] = {}
     for f in files:
-        tree += f"  {f['path']} ({f['lines']} lines)\n"
-    tree_tokens = len(tree.splitlines()) * 2  # tree lines are short
-    parts.append(tree)
-    total_tokens += tree_tokens
+        parts = f["path"].split("/")
+        top = "/".join(parts[:2]) if len(parts) >= 2 else parts[0]
+        by_dir.setdefault(top, []).append(f)
 
-    # Source files, sorted by size (smallest first to maximize coverage)
-    for f in sorted(files, key=lambda x: x["lines"]):
-        path = repo_dir / f["path"]
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+    for dir_name in sorted(by_dir):
+        dir_files = by_dir[dir_name]
+        total_lines = sum(f["lines"] for f in dir_files)
+        lines.append(f"\n**{dir_name}/** ({len(dir_files)} files, {total_lines} lines)")
+        for f in sorted(dir_files, key=lambda x: x["path"]):
+            lines.append(f"  {f['path']} ({f['lines']} lines)")
 
-        file_tokens = f["lines"] * TOKENS_PER_LINE
-        if total_tokens + file_tokens > max_tokens:
-            # Truncate large files: include first 50 lines + exports/interfaces
-            lines = content.splitlines()
-            truncated = lines[:50]
-            # Also include lines with export/interface/class/function definitions
-            for line in lines[50:]:
-                if re.match(r"^(export |interface |class |type |function |def |func |pub )", line):
-                    truncated.append(line)
-            content = "\n".join(truncated)
-            content += f"\n\n// ... truncated ({f['lines']} total lines)"
-            file_tokens = len(truncated) * TOKENS_PER_LINE
-
-        if total_tokens + file_tokens > max_tokens:
-            parts.append(f"\n## {f['path']}\n\n(Skipped — token budget exceeded)\n")
-            continue
-
-        parts.append(f"\n## {f['path']}\n\n```\n{content}\n```\n")
-        total_tokens += file_tokens
-
-    return "\n".join(parts)
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +300,6 @@ def main() -> None:
     parser.add_argument("--doc-path", default="docs/architecture.md",
                         help="Path in repo for the generated doc (default: docs/architecture.md)")
     parser.add_argument("--relevant-dirs", help="Comma-separated directories to scope (e.g., src/api,src/auth)")
-    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
-                        help="Max source tokens to include in LLM context")
     args = parser.parse_args()
 
     repo_dir = Path(args.repo_dir).resolve()
@@ -352,18 +320,18 @@ def main() -> None:
     total_lines = sum(f["lines"] for f in files)
     print(f"Found {len(files)} source files ({total_lines} lines)")
 
-    # 2. Read source context
-    source_context = read_source_context(repo_dir, files, args.max_tokens)
+    # 2. Build file tree (LLM reads files on demand via Read tools)
+    file_tree = build_file_tree(files)
 
     # 3. Build prompt
     prompt_template = Path(__file__).parent.parent / "templates" / "generate-prompt.md"
     if not prompt_template.exists():
-        # Try sibling directory (deployed layout)
         prompt_template = Path(__file__).parent / "generate-prompt.md"
 
     prompt_text = prompt_template.read_text()
     prompt_text = prompt_text.replace("${OUTPUT_DIR}", str(output_dir))
-    prompt_text = prompt_text.replace("${SOURCE_CONTEXT}", source_context)
+    prompt_text = prompt_text.replace("${REPO_DIR}", str(repo_dir))
+    prompt_text = prompt_text.replace("${FILE_TREE}", file_tree)
     prompt_text = prompt_text.replace("<Project Name>", repo_name.replace("-", " ").title())
 
     # 4. Create runner (minimal config — just need the LLM)
