@@ -28,16 +28,18 @@ from llm_runner import LLMRunner, create_runner
 
 # File extensions to include per language
 SOURCE_EXTENSIONS = {
-    ".ts", ".tsx", ".js", ".jsx",  # TypeScript/JavaScript
-    ".py",                          # Python
-    ".go",                          # Go
-    ".rs",                          # Rust
-    ".java",                        # Java
-    ".rb",                          # Ruby
-    ".cs",                          # C#
-    ".cpp", ".cc", ".c", ".h",     # C/C++
-    ".swift",                       # Swift
-    ".kt",                          # Kotlin
+    ".ts", ".tsx", ".js", ".jsx",   # TypeScript/JavaScript
+    ".py",                           # Python
+    ".go",                           # Go
+    ".rs",                           # Rust
+    ".java",                         # Java
+    ".rb",                           # Ruby
+    ".cs",                           # C#
+    ".cpp", ".cc", ".c", ".h",      # C/C++
+    ".swift",                        # Swift
+    ".kt",                           # Kotlin
+    ".graphql", ".gql",              # GraphQL schemas/operations
+    ".json",                         # Config files (feature flags, telemetry defs)
 }
 
 # Directories to always skip
@@ -47,11 +49,9 @@ SKIP_DIRS = {
     ".autodocs", ".github",
 }
 
-# Files to always skip
-SKIP_PATTERNS = {
-    ".test.", ".spec.", ".mock.", ".fixture.",
-    ".generated.", ".min.", ".d.ts", ".map",
-}
+# Files to skip by default (tests excluded unless --include-tests)
+SKIP_PATTERNS_TESTS = {".test.", ".spec.", ".mock.", ".fixture."}
+SKIP_PATTERNS_ALWAYS = {".generated.", ".min.", ".d.ts", ".map"}
 
 
 
@@ -62,8 +62,12 @@ SKIP_PATTERNS = {
 def discover_source_files(
     repo_dir: Path,
     relevant_dirs: list[str] | None = None,
+    include_tests: bool = False,
 ) -> list[dict]:
     """Find source files in the repo. Returns [{path, lines}] sorted by path."""
+    skip_patterns = set(SKIP_PATTERNS_ALWAYS)
+    if not include_tests:
+        skip_patterns |= SKIP_PATTERNS_TESTS
     files: list[dict] = []
 
     for root, dirs, filenames in os.walk(repo_dir):
@@ -86,7 +90,7 @@ def discover_source_files(
                 continue
 
             # Skip test/generated files
-            if any(p in filename for p in SKIP_PATTERNS):
+            if any(p in filename for p in skip_patterns):
                 continue
 
             try:
@@ -300,6 +304,7 @@ def main() -> None:
     parser.add_argument("--doc-path", default="docs/architecture.md",
                         help="Path in repo for the generated doc (default: docs/architecture.md)")
     parser.add_argument("--relevant-dirs", help="Comma-separated directories to scope (e.g., src/api,src/auth)")
+    parser.add_argument("--include-tests", action="store_true", help="Include test files in discovery")
     args = parser.parse_args()
 
     repo_dir = Path(args.repo_dir).resolve()
@@ -312,7 +317,7 @@ def main() -> None:
     print(f"Scanning {repo_dir}...")
 
     # 1. Discover source files
-    files = discover_source_files(repo_dir, relevant_dirs)
+    files = discover_source_files(repo_dir, relevant_dirs, include_tests=args.include_tests)
     if not files:
         print("No source files found.", file=sys.stderr)
         sys.exit(1)
