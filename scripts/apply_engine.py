@@ -636,6 +636,63 @@ def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
     return None
 
 
+def add_reviewers(config: dict, pr_number: int) -> None:
+    """Add reviewers to a PR. Best-effort — logs but doesn't fail."""
+    reviewers = config.get("auto_pr", {}).get("reviewers", [])
+    if not reviewers or not pr_number:
+        return
+
+    platform = config.get("platform", "")
+
+    if platform == "github":
+        owner = config.get("github", {}).get("owner", "")
+        repo = config.get("github", {}).get("repo", "")
+        if owner and repo:
+            for reviewer in reviewers:
+                subprocess.run(
+                    ["gh", "pr", "edit", str(pr_number),
+                     "-R", f"{owner}/{repo}", "--add-reviewer", reviewer],
+                    capture_output=True, text=True,
+                )
+
+    elif platform == "ado":
+        ado = config.get("ado", {})
+        org, project = ado.get("org", ""), ado.get("project", "")
+        if org and project:
+            for reviewer in reviewers:
+                subprocess.run(
+                    ["az", "repos", "pr", "reviewer", "add",
+                     "--id", str(pr_number),
+                     "--reviewers", reviewer,
+                     "--org", f"https://dev.azure.com/{org}",
+                     "-p", project],
+                    capture_output=True, text=True,
+                )
+
+    elif platform == "gitlab":
+        project = config.get("gitlab", {}).get("project_path", "")
+        if project:
+            reviewer_ids = []
+            for reviewer in reviewers:
+                result = subprocess.run(
+                    ["glab", "api", f"users?search={reviewer}"],
+                    capture_output=True, text=True,
+                )
+                if result.returncode == 0:
+                    try:
+                        users = json.loads(result.stdout)
+                        if users:
+                            reviewer_ids.append(str(users[0]["id"]))
+                    except (json.JSONDecodeError, ValueError, KeyError):
+                        pass
+            if reviewer_ids:
+                subprocess.run(
+                    ["glab", "mr", "update", str(pr_number),
+                     "-R", project, "--reviewer", ",".join(reviewer_ids)],
+                    capture_output=True, text=True,
+                )
+
+
 # ---------------------------------------------------------------------------
 # PR body builder
 # ---------------------------------------------------------------------------
@@ -804,6 +861,8 @@ def deterministic_apply(config: dict, output_dir: Path, repo_dir: Path) -> Apply
                                error="git branch/commit/push failed")
 
         pr_number = create_pr(config, branch, title, body)
+        if pr_number:
+            add_reviewers(config, pr_number)
     elif skipped or expired:
         # No file changes but suggestions need review — create PR with description only
         # This requires at least one commit, so skip PR creation in this case
