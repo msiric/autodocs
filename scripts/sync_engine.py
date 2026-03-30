@@ -64,6 +64,39 @@ PR_NUMBER_PATTERNS = [
 ]
 
 
+def expand_relevant_paths(repo_dir: Path, relevant_paths: list[str]) -> list[str]:
+    """Expand glob patterns in relevant_paths against the repo filesystem.
+
+    Exact paths pass through unchanged. Paths containing '*' or '?' are
+    expanded using glob. This allows configs like:
+        packages/components/components-channel-pages-*/
+    which automatically includes new packages matching the pattern.
+    """
+    expanded: list[str] = []
+    seen: set[str] = set()
+
+    for rp in relevant_paths:
+        if "*" in rp or "?" in rp:
+            # Glob pattern — expand against filesystem
+            for match in sorted(repo_dir.glob(rp.rstrip("/"))):
+                if match.is_dir():
+                    rel = str(match.relative_to(repo_dir))
+                    if rel not in seen:
+                        expanded.append(rel + "/")
+                        seen.add(rel)
+                elif match.is_file():
+                    rel = str(match.relative_to(repo_dir))
+                    if rel not in seen:
+                        expanded.append(rel)
+                        seen.add(rel)
+        else:
+            if rp not in seen:
+                expanded.append(rp)
+                seen.add(rp)
+
+    return expanded
+
+
 def discover_prs_from_git(
     repo_dir: Path,
     relevant_paths: list[str],
@@ -73,6 +106,7 @@ def discover_prs_from_git(
 
     Uses the local git history — works identically across all platforms.
     Returns [{number, merge_commit, merged_at}] with minimal data.
+    Supports glob patterns in relevant_paths (expanded before use).
     """
     if not relevant_paths:
         return []
@@ -947,22 +981,34 @@ def deterministic_sync(
     lookback = lookback_file.read_text().strip()
     feature_name = config.get("feature_name", "Feature")
 
-    relevant_paths = config.get("relevant_paths") or []
+    raw_paths = config.get("relevant_paths") or []
+    relevant_paths = expand_relevant_paths(repo_dir, raw_paths)
+    # Use expanded paths throughout (classify, diffs, etc.)
+    config = {**config, "relevant_paths": relevant_paths}
 
     # Two discovery strategies:
     # 1. With relevant_paths: git-first discovery (fast, path-filtered)
     # 2. Without relevant_paths: platform API fetch (all PRs, small repos)
     prs: list[dict] = []
 
+    git_discovered = False
     if relevant_paths:
         prs = discover_prs_from_git(repo_dir, relevant_paths, lookback)
-        # Enrich with platform API details (best-effort)
-        for pr in prs:
-            details = fetch_pr_details(config, pr["number"])
-            if details:
-                pr["title"] = details.get("title") or pr["title"]
-                pr["description"] = details.get("description") or pr["description"]
-                pr["author"] = details.get("author") or pr["author"]
+        if prs:
+            git_discovered = True
+            # Git-first PRs are already path-filtered — mark as YES.
+            # classify_prs would misclassify them as NO because they lack
+            # file data (git log only returns commit hash + message).
+            for pr in prs:
+                pr["classification"] = "YES"
+                pr["classification_label"] = feature_name
+            # Enrich with platform API details (best-effort)
+            for pr in prs:
+                details = fetch_pr_details(config, pr["number"])
+                if details:
+                    pr["title"] = details.get("title") or pr["title"]
+                    pr["description"] = details.get("description") or pr["description"]
+                    pr["author"] = details.get("author") or pr["author"]
 
     if not prs:
         # Fallback: platform API fetch (no relevant_paths, shallow clone, etc.)
@@ -975,8 +1021,9 @@ def deterministic_sync(
     # Filter to team members
     prs = filter_team_prs(prs, config)
 
-    # Classify using available file data
-    prs = classify_prs(prs, config)
+    # Classify only API-fetched PRs (git-discovered PRs are already classified)
+    if not git_discovered:
+        prs = classify_prs(prs, config)
 
     # Git operations only for relevant PRs
     for pr in prs:
