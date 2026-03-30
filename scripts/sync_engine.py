@@ -474,7 +474,12 @@ def get_change_types(repo_dir: Path, merge_commit: str) -> list[dict]:
 def get_targeted_diffs(
     repo_dir: Path, merge_commit: str, files: list[dict], config: dict,
 ) -> dict[str, str]:
-    """Get diffs for mapped files only, within budget. Returns {path: diff_text}."""
+    """Get diffs for relevant PR files within budget. Returns {path: diff_text}.
+
+    Includes ALL files from relevant_paths (not just package_map keys) so that
+    new packages/files introduced in a PR are visible to drift detection.
+    Mapped files are prioritized; unmapped-but-relevant files fill remaining budget.
+    """
     if not merge_commit or not files:
         return {}
 
@@ -482,26 +487,45 @@ def get_targeted_diffs(
     for doc in config.get("docs") or []:
         for key in (doc.get("package_map") or {}).keys():
             package_map_keys.add(key)
+    relevant_paths = config.get("relevant_paths") or []
     exclude = set(config.get("exclude_patterns") or [])
 
-    diffs: dict[str, str] = {}
-    total_lines = 0
-
+    # Separate into mapped (priority) and unmapped-but-relevant (secondary)
+    mapped_files: list[str] = []
+    unmapped_files: list[str] = []
     for f in files:
         path = f["path"]
         if _is_noise_file(path, exclude):
             continue
-        if not _is_mapped_file(path, package_map_keys):
-            continue
+        if _is_mapped_file(path, package_map_keys):
+            mapped_files.append(path)
+        elif _is_relevant_file(path, relevant_paths):
+            unmapped_files.append(path)
+
+    diffs: dict[str, str] = {}
+    total_lines = 0
+
+    # Mapped files first (these have known doc sections)
+    for path in mapped_files:
         if total_lines >= DIFF_BUDGET_PER_PR:
             break
+        diff_text = _get_file_diff(repo_dir, merge_commit, path)
+        if diff_text:
+            diff_lines = diff_text.splitlines()
+            remaining = DIFF_BUDGET_PER_PR - total_lines
+            if len(diff_lines) > remaining:
+                diff_lines = diff_lines[:remaining]
+                diff_lines.append(f"... (truncated, {DIFF_BUDGET_PER_PR} line budget)")
+            diffs[path] = "\n".join(diff_lines)
+            total_lines += len(diff_lines)
 
-        result = subprocess.run(
-            ["git", "diff", "-U3", f"{merge_commit}^..{merge_commit}", "--", path],
-            capture_output=True, text=True, cwd=str(repo_dir),
-        )
-        if result.returncode == 0 and result.stdout:
-            diff_lines = result.stdout.splitlines()
+    # Unmapped-but-relevant files second (new packages, new files in tracked areas)
+    for path in unmapped_files:
+        if total_lines >= DIFF_BUDGET_PER_PR:
+            break
+        diff_text = _get_file_diff(repo_dir, merge_commit, path)
+        if diff_text:
+            diff_lines = diff_text.splitlines()
             remaining = DIFF_BUDGET_PER_PR - total_lines
             if len(diff_lines) > remaining:
                 diff_lines = diff_lines[:remaining]
@@ -510,6 +534,23 @@ def get_targeted_diffs(
             total_lines += len(diff_lines)
 
     return diffs
+
+
+def _get_file_diff(repo_dir: Path, merge_commit: str, path: str) -> str | None:
+    """Get diff for a single file from a merge commit."""
+    result = subprocess.run(
+        ["git", "diff", "-U3", f"{merge_commit}^..{merge_commit}", "--", path],
+        capture_output=True, text=True, cwd=str(repo_dir),
+    )
+    return result.stdout if result.returncode == 0 and result.stdout else None
+
+
+def _is_relevant_file(path: str, relevant_paths: list[str]) -> bool:
+    """Check if a file is under any relevant_paths directory."""
+    for rp in relevant_paths:
+        if path.startswith(rp.rstrip("/")):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
