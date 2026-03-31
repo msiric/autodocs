@@ -510,7 +510,6 @@ def _parse_changelog_for_merge(text: str) -> list[tuple[str, list[dict]]]:
 def git_branch_commit_push(
     repo_dir: Path,
     branch: str,
-    target_branch: str,
     files: list[Path],
     message: str,
 ) -> bool:
@@ -875,7 +874,7 @@ def deterministic_apply(config: dict, output_dir: Path, repo_dir: Path) -> Apply
         for a in applied:
             commit_msg += f"- {a['doc']}: {a['section']} ({a.get('triggered_by', '')})\n"
 
-        if not git_branch_commit_push(repo_dir, branch, target, modified_files, commit_msg):
+        if not git_branch_commit_push(repo_dir, branch, modified_files, commit_msg):
             return ApplyResult(success=False, applied=applied, skipped=[s for s in skipped],
                                error="git branch/commit/push failed")
 

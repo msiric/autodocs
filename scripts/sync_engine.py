@@ -62,6 +62,11 @@ class FetchResult:
     retryable: bool = False          # Whether a retry might help
 
 
+# PR classification labels
+CLASS_YES = "YES"       # PR definitely relevant (path match)
+CLASS_MAYBE = "MAYBE"   # PR possibly relevant (pattern match)
+CLASS_NO = "NO"         # PR not relevant
+
 # Files to skip during diff analysis (noise)
 NOISE_PATTERNS = {
     "*.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
@@ -838,12 +843,12 @@ def classify_prs(prs: list[dict], config: dict) -> list[dict]:
                 break
 
         if matched_prefix:
-            pr["classification"] = "YES"
+            pr["classification"] = CLASS_YES
             pr["matched_prefix"] = matched_prefix
         elif relevant_pattern and any(relevant_pattern in fp.lower() for fp in file_paths):
-            pr["classification"] = "MAYBE"
+            pr["classification"] = CLASS_MAYBE
         else:
-            pr["classification"] = "NO"
+            pr["classification"] = CLASS_NO
         pr["classification_label"] = feature_name
 
     return prs
@@ -852,11 +857,11 @@ def classify_prs(prs: list[dict], config: dict) -> list[dict]:
 def _classify_by_fallback(pr: dict, pattern: str) -> str:
     """Classify by title when file paths are unavailable."""
     if not pattern:
-        return "NO"
+        return CLASS_NO
     title = pr.get("title", "").lower()
     if pattern in title:
-        return "MAYBE"
-    return "NO"
+        return CLASS_MAYBE
+    return CLASS_NO
 
 
 def extract_owner_activity(prs: list[dict], config: dict) -> dict:
@@ -906,7 +911,7 @@ def filter_team_prs(prs: list[dict], config: dict) -> list[dict]:
 
     return [pr for pr in prs
             if pr.get("author") in usernames
-            or pr.get("classification") == "YES"]  # git-discovered PRs: already path-filtered
+            or pr.get("classification") == CLASS_YES]  # git-discovered PRs: already path-filtered
 
 
 # ---------------------------------------------------------------------------
@@ -918,7 +923,7 @@ def write_daily_report(
     feature_name: str,
 ) -> None:
     """Write daily-report.md in the exact format downstream helpers expect."""
-    feature_prs = [p for p in prs if p.get("classification") in ("YES", "MAYBE")]
+    feature_prs = [p for p in prs if p.get("classification") in (CLASS_YES, CLASS_MAYBE)]
     lines = [
         "---",
         f"date: {today}",
@@ -938,7 +943,7 @@ def write_daily_report(
         lines.append("No PRs merged in the lookback window.")
     else:
         for pr in prs:
-            cls = pr.get("classification", "NO")
+            cls = pr.get("classification", CLASS_NO)
             label = pr.get("classification_label", "Feature")
             prefix = pr.get("matched_prefix", "")
 
@@ -947,9 +952,9 @@ def write_daily_report(
             if desc:
                 lines.append(f"  Description: {desc}")
 
-            if cls == "YES" and prefix:
+            if cls == CLASS_YES and prefix:
                 lines.append(f"  {label}: YES ({prefix})")
-            elif cls == "MAYBE":
+            elif cls == CLASS_MAYBE:
                 lines.append(f"  {label}: MAYBE — review")
             elif cls == "REFACTOR":
                 lines.append(f"  {label}: REFACTOR")
@@ -957,7 +962,7 @@ def write_daily_report(
                 lines.append(f"  {label}: NO")
 
             # File list for YES/MAYBE PRs
-            if cls in ("YES", "MAYBE"):
+            if cls in (CLASS_YES, CLASS_MAYBE):
                 change_types = pr.get("change_types") or []
                 if change_types:
                     lines.append("  Files:")
@@ -1081,7 +1086,7 @@ def deterministic_sync(
             # classify_prs would misclassify them as NO because they lack
             # file data (git log only returns commit hash + message).
             for pr in prs:
-                pr["classification"] = "YES"
+                pr["classification"] = CLASS_YES
                 pr["classification_label"] = feature_name
             # Enrich with platform API details (best-effort, parallel)
             from concurrent.futures import ThreadPoolExecutor
@@ -1111,7 +1116,7 @@ def deterministic_sync(
 
     # Git operations only for relevant PRs
     for pr in prs:
-        if pr.get("classification") not in ("YES", "MAYBE"):
+        if pr.get("classification") not in (CLASS_YES, CLASS_MAYBE):
             continue
 
         # Get change types via git diff-tree
@@ -1199,24 +1204,29 @@ def _in_window(date_str: str, lookback: str) -> bool:
 
 
 def _sanitize_title(title: str) -> str:
-    """Sanitize PR title to prevent markdown injection."""
-    title = title.replace("---", "--")
-    title = title.replace("### ", "## ")
-    if title.startswith("> "):
-        title = "- " + title[2:]
-    return title
+    """Sanitize PR title to prevent markdown injection in reports.
+
+    PR titles are untrusted input that end up in markdown files.
+    Strip any markdown formatting that could break document structure.
+    """
+    # Strip leading markdown structure characters
+    title = re.sub(r"^#+\s", "", title)      # heading markers
+    title = re.sub(r"^>\s", "", title)        # blockquote
+    title = re.sub(r"^-{3,}", "", title)      # horizontal rules
+    # Escape remaining markdown that could affect structure
+    title = title.replace("|", "\\|")          # table cell breaks
+    return title.strip()
 
 
 def _is_noise_file(path: str, extra_exclude: set[str]) -> bool:
     """Check if a file should be skipped during diff analysis."""
+    import fnmatch
     for d in NOISE_DIRS:
         if d in path:
             return True
     basename = path.split("/")[-1] if "/" in path else path
     for pattern in NOISE_PATTERNS:
-        if pattern.startswith("*") and basename.endswith(pattern[1:]):
-            return True
-        if basename == pattern:
+        if fnmatch.fnmatch(basename, pattern):
             return True
     for pattern in extra_exclude:
         if pattern in path:
