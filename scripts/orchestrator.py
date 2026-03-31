@@ -295,7 +295,14 @@ class Orchestrator:
         _compute_match_rate(self.output_dir, self.logger)
         self._run_drift_preprocess()
 
-        # Call 2: Drift
+        # Call 2: Drift (skip if no feature PRs — saves one LLM call)
+        report_text = self.storage.read("daily-report.md") or ""
+        if "feature_prs: 0" in report_text:
+            self.status["drift"] = "skipped"
+            self.logger.log("DRIFT SKIPPED: no feature PRs in lookback window")
+            self.logger.metric("drift", "skipped")
+            return self.status
+
         self._run_drift()
 
         # Call 3: Suggest (only if actionable drift)
