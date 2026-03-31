@@ -637,22 +637,31 @@ def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
 
 
 def add_reviewers(config: dict, pr_number: int) -> None:
-    """Add reviewers to a PR. Best-effort — logs but doesn't fail."""
+    """Add reviewers to a PR. Best-effort — prints warnings on failure."""
     reviewers = config.get("auto_pr", {}).get("reviewers", [])
     if not reviewers or not pr_number:
         return
 
     platform = config.get("platform", "")
 
+    def _run_reviewer_cmd(cmd: list[str], reviewer: str) -> None:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()[:200]
+                print(f"Warning: failed to add reviewer {reviewer}: {stderr}")
+        except FileNotFoundError:
+            print(f"Warning: CLI not found for adding reviewer {reviewer}")
+
     if platform == "github":
         owner = config.get("github", {}).get("owner", "")
         repo = config.get("github", {}).get("repo", "")
         if owner and repo:
             for reviewer in reviewers:
-                subprocess.run(
+                _run_reviewer_cmd(
                     ["gh", "pr", "edit", str(pr_number),
                      "-R", f"{owner}/{repo}", "--add-reviewer", reviewer],
-                    capture_output=True, text=True,
+                    reviewer,
                 )
 
     elif platform == "ado":
@@ -660,13 +669,13 @@ def add_reviewers(config: dict, pr_number: int) -> None:
         org, project = ado.get("org", ""), ado.get("project", "")
         if org and project:
             for reviewer in reviewers:
-                subprocess.run(
+                _run_reviewer_cmd(
                     ["az", "repos", "pr", "reviewer", "add",
                      "--id", str(pr_number),
                      "--reviewers", reviewer,
                      "--org", f"https://dev.azure.com/{org}",
                      "-p", project],
-                    capture_output=True, text=True,
+                    reviewer,
                 )
 
     elif platform == "gitlab":
@@ -674,10 +683,14 @@ def add_reviewers(config: dict, pr_number: int) -> None:
         if project:
             reviewer_ids = []
             for reviewer in reviewers:
-                result = subprocess.run(
-                    ["glab", "api", f"users?search={reviewer}"],
-                    capture_output=True, text=True,
-                )
+                try:
+                    result = subprocess.run(
+                        ["glab", "api", f"users?search={reviewer}"],
+                        capture_output=True, text=True,
+                    )
+                except FileNotFoundError:
+                    print(f"Warning: glab CLI not found for adding reviewer {reviewer}")
+                    return
                 if result.returncode == 0:
                     try:
                         users = json.loads(result.stdout)
@@ -686,11 +699,14 @@ def add_reviewers(config: dict, pr_number: int) -> None:
                     except (json.JSONDecodeError, ValueError, KeyError):
                         pass
             if reviewer_ids:
-                subprocess.run(
+                _run_reviewer_cmd(
                     ["glab", "mr", "update", str(pr_number),
                      "-R", project, "--reviewer", ",".join(reviewer_ids)],
-                    capture_output=True, text=True,
+                    ", ".join(reviewers),
                 )
+
+    else:
+        print(f"Warning: reviewer assignment not supported for platform '{platform}'")
 
 
 # ---------------------------------------------------------------------------

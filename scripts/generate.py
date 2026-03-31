@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,7 +23,7 @@ except ImportError:
     print("Error: pyyaml is required. Install: pip3 install pyyaml", file=sys.stderr)
     sys.exit(2)
 
-from llm_runner import LLMRunner, create_runner
+from llm_runner import create_runner
 
 # File extensions to include per language
 SOURCE_EXTENSIONS = {
@@ -40,6 +39,13 @@ SOURCE_EXTENSIONS = {
     ".kt",                           # Kotlin
     ".graphql", ".gql",              # GraphQL schemas/operations
     ".json",                         # Config files (feature flags, telemetry defs)
+}
+
+# JSON files to always skip (noise in most repos)
+SKIP_JSON_NAMES = {
+    "package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json",
+    "jest.config.json", ".eslintrc.json", "tslint.json", "lerna.json",
+    "rush.json", "bower.json", "composer.json",
 }
 
 # Directories to always skip
@@ -87,6 +93,10 @@ def discover_source_files(
 
             # Check extension
             if path.suffix not in SOURCE_EXTENSIONS:
+                continue
+
+            # Skip noise JSON files (package.json, tsconfig, lock files, etc.)
+            if path.suffix == ".json" and filename in SKIP_JSON_NAMES:
                 continue
 
             # Skip test/generated files

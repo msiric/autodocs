@@ -59,7 +59,7 @@ PR_NUMBER_PATTERNS = [
     re.compile(r"Merge pull request #(\d+)"),      # GitHub merge
     re.compile(r"Merged PR (\d+)"),                 # ADO (all strategies)
     re.compile(r"\(pull request #(\d+)\)"),          # Bitbucket
-    re.compile(r"!(\d+)"),                           # GitLab (See merge request ...!NNN)
+    re.compile(r"(?<!\d)!(\d+)\b"),                    # GitLab (See merge request ...!NNN)
     re.compile(r"\(#(\d+)\)"),                       # GitHub squash
 ]
 
@@ -121,12 +121,12 @@ def discover_cross_cutting_files(
     if not search_dirs:
         return []
 
-    # grep -rlE for extended regex alternation
-    pattern = "|".join(identifiers)
-    result = subprocess.run(
-        ["grep", "-rlE", pattern] + search_dirs,
-        capture_output=True, text=True,
-    )
+    # grep -rl with fixed strings (-F) — no regex escaping needed
+    grep_cmd = ["grep", "-rlF"]
+    for ident in identifiers:
+        grep_cmd.extend(["-e", ident])
+    grep_cmd.extend(search_dirs)
+    result = subprocess.run(grep_cmd, capture_output=True, text=True)
     if result.returncode not in (0, 1):  # 1 = no matches (not an error)
         return []
 
@@ -174,7 +174,7 @@ def discover_prs_from_git(
         f"--since={lookback}",
         f"--format={DELIM}%n%H %aI%n%B",  # delimiter, hash+date, full message
         "--",
-    ] + [p.rstrip("/") + "/" for p in relevant_paths]
+    ] + relevant_paths
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_dir))
     if result.returncode != 0:
@@ -244,11 +244,14 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
         repo = config.get("github", {}).get("repo", "")
         if not owner or not repo:
             return None
-        result = subprocess.run(
-            ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
-             "--jq", '{title: .title, body: .body, author: .user.login}'],
-            capture_output=True, text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
+                 "--jq", '{title: .title, body: .body, author: .user.login}'],
+                capture_output=True, text=True,
+            )
+        except FileNotFoundError:
+            return None
         if result.returncode != 0:
             return None
         try:
@@ -293,10 +296,13 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
         if not project_path:
             return None
         encoded = project_path.replace("/", "%2F")
-        result = subprocess.run(
-            ["glab", "api", f"projects/{encoded}/merge_requests/{pr_number}"],
-            capture_output=True, text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["glab", "api", f"projects/{encoded}/merge_requests/{pr_number}"],
+                capture_output=True, text=True,
+            )
+        except FileNotFoundError:
+            return None
         if result.returncode != 0:
             return None
         try:
@@ -591,22 +597,8 @@ def get_targeted_diffs(
     diffs: dict[str, str] = {}
     total_lines = 0
 
-    # Mapped files first (these have known doc sections)
-    for path in mapped_files:
-        if total_lines >= DIFF_BUDGET_PER_PR:
-            break
-        diff_text = _get_file_diff(repo_dir, merge_commit, path)
-        if diff_text:
-            diff_lines = diff_text.splitlines()
-            remaining = DIFF_BUDGET_PER_PR - total_lines
-            if len(diff_lines) > remaining:
-                diff_lines = diff_lines[:remaining]
-                diff_lines.append(f"... (truncated, {DIFF_BUDGET_PER_PR} line budget)")
-            diffs[path] = "\n".join(diff_lines)
-            total_lines += len(diff_lines)
-
-    # Unmapped-but-relevant files second (new packages, new files in tracked areas)
-    for path in unmapped_files:
+    # Mapped files first (known doc sections), then unmapped-but-relevant
+    for path in mapped_files + unmapped_files:
         if total_lines >= DIFF_BUDGET_PER_PR:
             break
         diff_text = _get_file_diff(repo_dir, merge_commit, path)
@@ -632,10 +624,16 @@ def _get_file_diff(repo_dir: Path, merge_commit: str, path: str) -> str | None:
 
 
 def _is_relevant_file(path: str, relevant_paths: list[str]) -> bool:
-    """Check if a file is under any relevant_paths directory."""
+    """Check if a file matches any relevant_paths entry (directory or exact file)."""
     for rp in relevant_paths:
-        if path.startswith(rp.rstrip("/")):
-            return True
+        if rp.endswith("/"):
+            # Directory prefix — must match with the separator
+            if path.startswith(rp):
+                return True
+        else:
+            # Exact file path or directory without trailing slash
+            if path == rp or path.startswith(rp + "/"):
+                return True
     return False
 
 
@@ -879,7 +877,9 @@ def filter_team_prs(prs: list[dict], config: dict) -> list[dict]:
     if not usernames:
         return prs  # No filter if no usernames configured
 
-    return [pr for pr in prs if pr.get("author") in usernames]
+    return [pr for pr in prs
+            if pr.get("author") in usernames
+            or pr.get("classification") == "YES"]  # git-discovered PRs: already path-filtered
 
 
 # ---------------------------------------------------------------------------
