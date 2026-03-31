@@ -95,6 +95,88 @@ class TestToolAllowlists:
 
 
 # ---------------------------------------------------------------------------
+# Cross-cutting file discovery (sync_engine)
+# ---------------------------------------------------------------------------
+
+class TestDiscoverCrossCuttingFiles:
+    def setup_method(self):
+        from sync_engine import discover_cross_cutting_files
+        self.discover = discover_cross_cutting_files
+
+    def test_finds_files_with_identifier(self, tmp_path: Path):
+        pkg = tmp_path / "packages" / "shared-lib" / "src"
+        pkg.mkdir(parents=True)
+        (pkg / "helper.ts").write_text("export function useChannelPageData() {}")
+        (pkg / "unrelated.ts").write_text("export function useSomethingElse() {}")
+        config = {
+            "cross_cutting_packages": ["packages/shared-lib/src/"],
+            "cross_cutting_identifiers": ["ChannelPage"],
+        }
+        files = self.discover(tmp_path, config)
+        assert len(files) == 1
+        assert "helper.ts" in files[0]
+
+    def test_skips_test_files(self, tmp_path: Path):
+        pkg = tmp_path / "packages" / "lib" / "src"
+        pkg.mkdir(parents=True)
+        (pkg / "page.ts").write_text("const channelPage = true;")
+        (pkg / "page.test.ts").write_text("test('channelPage', () => {});")
+        config = {
+            "cross_cutting_packages": ["packages/lib/src/"],
+            "cross_cutting_identifiers": ["channelPage"],
+        }
+        files = self.discover(tmp_path, config)
+        assert len(files) == 1
+        assert ".test." not in files[0]
+
+    def test_empty_config(self, tmp_path: Path):
+        assert self.discover(tmp_path, {}) == []
+        assert self.discover(tmp_path, {"cross_cutting_packages": []}) == []
+        assert self.discover(tmp_path, {"cross_cutting_identifiers": ["X"]}) == []
+
+    def test_nonexistent_package(self, tmp_path: Path):
+        config = {
+            "cross_cutting_packages": ["packages/nonexistent/"],
+            "cross_cutting_identifiers": ["ChannelPage"],
+        }
+        assert self.discover(tmp_path, config) == []
+
+    def test_no_matches(self, tmp_path: Path):
+        pkg = tmp_path / "packages" / "lib" / "src"
+        pkg.mkdir(parents=True)
+        (pkg / "helper.ts").write_text("export function doStuff() {}")
+        config = {
+            "cross_cutting_packages": ["packages/lib/src/"],
+            "cross_cutting_identifiers": ["ChannelPage"],
+        }
+        assert self.discover(tmp_path, config) == []
+
+    def test_multiple_identifiers(self, tmp_path: Path):
+        pkg = tmp_path / "packages" / "lib" / "src"
+        pkg.mkdir(parents=True)
+        (pkg / "a.ts").write_text("useChannelPage()")
+        (pkg / "b.ts").write_text("channel-pages config")
+        (pkg / "c.ts").write_text("nothing relevant")
+        config = {
+            "cross_cutting_packages": ["packages/lib/src/"],
+            "cross_cutting_identifiers": ["ChannelPage", "channel-pages"],
+        }
+        files = self.discover(tmp_path, config)
+        assert len(files) == 2
+
+    def test_deduplication(self, tmp_path: Path):
+        pkg = tmp_path / "packages" / "lib" / "src"
+        pkg.mkdir(parents=True)
+        (pkg / "a.ts").write_text("ChannelPage and channelPage in same file")
+        config = {
+            "cross_cutting_packages": ["packages/lib/src/"],
+            "cross_cutting_identifiers": ["ChannelPage", "channelPage"],
+        }
+        files = self.discover(tmp_path, config)
+        assert len(files) == 1
+
+
+# ---------------------------------------------------------------------------
 # Pipeline gating helpers
 # ---------------------------------------------------------------------------
 
@@ -348,3 +430,52 @@ class TestLogger:
         data = json.loads(content.strip())
         assert data["call"] == "sync"
         assert data["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Config schema validation (schema_helper)
+# ---------------------------------------------------------------------------
+
+class TestSchemaValidation:
+    def setup_method(self):
+        from schema_helper import validate_config
+        self.validate = validate_config
+
+    def test_cross_cutting_valid(self):
+        config = {
+            "platform": "ado", "ado": {"org": "x", "project": "y"},
+            "cross_cutting_packages": ["pkg/a/", "pkg/b/"],
+            "cross_cutting_identifiers": ["FeatureName"],
+        }
+        assert self.validate(config) == []
+
+    def test_cross_cutting_packages_without_identifiers(self):
+        config = {
+            "platform": "github", "github": {"owner": "x", "repo": "y"},
+            "cross_cutting_packages": ["pkg/a/"],
+        }
+        errors = self.validate(config)
+        assert any("cross_cutting_identifiers" in e for e in errors)
+
+    def test_cross_cutting_identifiers_without_packages(self):
+        config = {
+            "platform": "github", "github": {"owner": "x", "repo": "y"},
+            "cross_cutting_identifiers": ["Feature"],
+        }
+        errors = self.validate(config)
+        assert any("cross_cutting_packages" in e for e in errors)
+
+    def test_cross_cutting_not_list(self):
+        config = {
+            "platform": "github", "github": {"owner": "x", "repo": "y"},
+            "cross_cutting_packages": "not-a-list",
+            "cross_cutting_identifiers": ["X"],
+        }
+        errors = self.validate(config)
+        assert any("must be a list" in e for e in errors)
+
+    def test_no_cross_cutting_is_valid(self):
+        config = {
+            "platform": "github", "github": {"owner": "x", "repo": "y"},
+        }
+        assert self.validate(config) == []

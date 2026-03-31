@@ -69,6 +69,18 @@ def validate_config(config: dict) -> list[str]:
     if rp is not None and not isinstance(rp, list):
         errors.append("relevant_paths must be a list")
 
+    # Cross-cutting discovery (optional, but must be well-formed if present)
+    ccp = config.get("cross_cutting_packages")
+    if ccp is not None and not isinstance(ccp, list):
+        errors.append("cross_cutting_packages must be a list")
+    cci = config.get("cross_cutting_identifiers")
+    if cci is not None and not isinstance(cci, list):
+        errors.append("cross_cutting_identifiers must be a list")
+    if ccp and not cci:
+        errors.append("cross_cutting_packages requires cross_cutting_identifiers")
+    if cci and not ccp:
+        errors.append("cross_cutting_identifiers requires cross_cutting_packages")
+
     # Auto PR (optional, but must be well-formed if present)
     auto_pr = config.get("auto_pr")
     if auto_pr is not None:

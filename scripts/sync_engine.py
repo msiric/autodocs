@@ -97,6 +97,58 @@ def expand_relevant_paths(repo_dir: Path, relevant_paths: list[str]) -> list[str
     return expanded
 
 
+def discover_cross_cutting_files(
+    repo_dir: Path,
+    config: dict,
+) -> list[str]:
+    """Discover files in cross-cutting packages that reference the tracked feature.
+
+    Greps cross_cutting_packages for cross_cutting_identifiers at runtime.
+    Returns repo-relative file paths. This eliminates the need for a static
+    file list — new integration points are discovered automatically.
+    """
+    packages = config.get("cross_cutting_packages") or []
+    identifiers = config.get("cross_cutting_identifiers") or []
+    if not packages or not identifiers:
+        return []
+
+    # Build search directories (only existing ones)
+    search_dirs = []
+    for pkg in packages:
+        pkg_path = repo_dir / pkg.rstrip("/")
+        if pkg_path.is_dir():
+            search_dirs.append(str(pkg_path))
+    if not search_dirs:
+        return []
+
+    # grep -rlE for extended regex alternation
+    pattern = "|".join(identifiers)
+    result = subprocess.run(
+        ["grep", "-rlE", pattern] + search_dirs,
+        capture_output=True, text=True,
+    )
+    if result.returncode not in (0, 1):  # 1 = no matches (not an error)
+        return []
+
+    skip = {".test.", ".spec.", "__tests__", "__generated__", "node_modules"}
+    files: list[str] = []
+    seen: set[str] = set()
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        if any(s in line for s in skip):
+            continue
+        try:
+            rel = str(Path(line).relative_to(repo_dir))
+        except ValueError:
+            continue
+        if rel not in seen:
+            files.append(rel)
+            seen.add(rel)
+
+    return sorted(files)
+
+
 def discover_prs_from_git(
     repo_dir: Path,
     relevant_paths: list[str],
@@ -982,8 +1034,10 @@ def deterministic_sync(
     feature_name = config.get("feature_name", "Feature")
 
     raw_paths = config.get("relevant_paths") or []
-    relevant_paths = expand_relevant_paths(repo_dir, raw_paths)
-    # Use expanded paths throughout (classify, diffs, etc.)
+    owned_paths = expand_relevant_paths(repo_dir, raw_paths)
+    cross_cutting_files = discover_cross_cutting_files(repo_dir, config)
+    relevant_paths = owned_paths + cross_cutting_files
+    # Use combined paths throughout (discovery, diffs, etc.)
     config = {**config, "relevant_paths": relevant_paths}
 
     # Two discovery strategies:
