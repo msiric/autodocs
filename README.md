@@ -134,17 +134,28 @@ The LLM is only used for steps 2 and 3 (drift detection and suggestion generatio
 
 ### Setup
 
+**Starting from scratch (no existing docs):**
+
 ```bash
 git clone https://github.com/msiric/autodocs.git
 cd autodocs
-./setup.sh
+./setup.sh generate /path/to/your-repo /path/to/output-dir --relevant-dirs src/
+```
+
+This generates an architecture doc from your codebase and a matching `config.yaml`. Review the generated doc, commit it to your repo, then proceed to the wizard:
+
+**Interactive wizard (or if you already have docs):**
+
+```bash
+./setup.sh                  # interactive setup
+./setup.sh --quick          # auto-detect everything
 ```
 
 The setup wizard will:
 
-1. Ask for your repo path, output directory, ADO details
-2. Resolve your repository GUID
-3. Generate a config template for you to customize
+1. Detect your platform, repo details, and team members
+2. Select or generate a doc to track
+3. Generate a config with package_map
 4. Render all prompts, wrapper scripts, and schedules
 
 ### Configure

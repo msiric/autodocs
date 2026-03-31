@@ -48,6 +48,12 @@ autodocs-now            # first maintenance run
 - [x] PR number extraction from merge commit messages (all merge strategies)
 - [x] Falls back to platform API when git discovery returns nothing
 - [x] Empty `relevant_paths` falls back to platform API fetch (small repos)
+- [x] Glob pattern expansion in `relevant_paths` (auto-discover new packages)
+- [x] Dynamic cross-cutting file discovery via runtime grep (`cross_cutting_packages` + `cross_cutting_identifiers`)
+- [x] Pre-classify git-discovered PRs as YES (bypass title-based fallback)
+- [x] Include all relevant-path diffs in PRs (not just package_map-mapped files)
+- [x] Parallel PR enrichment via ThreadPoolExecutor
+- [x] Auto-assign reviewers on autodocs PRs (`auto_pr.reviewers`)
 
 ### Path-based webhook filtering
 - [ ] Webhook server checks changed files against `relevant_paths` before triggering pipeline
@@ -132,10 +138,14 @@ autodocs-now            # first maintenance run
 - [x] Cross-reference check in suggest prompt
 - [x] Review thread fetching from all 4 platforms
 - [x] Error classification (retryable vs permanent)
-- [x] Config schema validation
+- [x] Config schema validation (including cross-cutting fields)
+- [x] Bitbucket token leak fix (curl → urllib, token stays in-process memory)
+- [x] Path traversal protection (glob expansion + repo_path validation)
+- [x] Markdown injection prevention in PR titles
+- [x] Noise file pattern matching fix (fnmatch for *.test.* patterns)
 
 ### Testing & infrastructure
-- [x] 153 pytest + 249 BATS = 402 tests
+- [x] 166 pytest + 249 BATS = 415 tests
 - [x] CI workflow (GitHub Actions: pytest + BATS on push/PR)
 - [x] End-to-end validated against autodocs-demo repo (multiple rounds)
 - [x] pyproject.toml with dependency groups

@@ -15,8 +15,11 @@ All notable changes to autodocs are documented here. Format follows [Keep a Chan
 - **Pipeline lock in orchestrator** — `PipelineLock` using atomic `mkdir`, protecting all entry points (cron, webhook, direct invocation). Stale lock detection (>2 hours).
 - **Review thread fetching** — fetches PR review comments from all 4 platforms (GitHub API, GitLab notes, Bitbucket comments, ADO threads). Bot reviews filtered.
 - **Git-first PR discovery** — discovers relevant PRs via `git log --first-parent -- relevant_paths/` instead of fetching all PRs from platform API. Works identically across all 4 platforms. Critical for monorepos: 1000 daily merges but 10 relevant → only 10 processed. Falls back to platform API when git discovery returns nothing.
-- **Doc generation** (`generate.py`) — `setup.sh generate` reads a codebase and generates an architecture doc + config.yaml with package_map derived from doc sections. Zero manual doc writing or config editing.
-- **Unit test suite** — 119 pytest tests covering orchestrator logic, apply engine, LLM runner (including mock-based agentic loop), and webhook server.
+- **Doc generation** (`generate.py`) — `setup.sh generate` reads a codebase and generates an architecture doc + config.yaml with package_map derived from doc sections. Investigation-based prompt (4 phases: reconnaissance, architecture mapping, deep dive, write). Zero manual doc writing or config editing.
+- **Dynamic cross-cutting discovery** — `cross_cutting_packages` + `cross_cutting_identifiers` config fields. At sync time, greps external packages for your feature's identifiers to dynamically discover integration points. No static file list to maintain.
+- **PR reviewer assignment** — `auto_pr.reviewers` config field. Assigns specified reviewers to every autodocs PR via platform CLI (GitHub, ADO, GitLab).
+- **Security hardening** — Bitbucket API calls use `urllib.request` instead of `curl` subprocess (prevents token leak via `ps aux`). Path traversal protection in glob expansion and doc repo_path. Markdown injection prevention in PR titles.
+- **Unit test suite** — 166 pytest tests covering orchestrator logic, apply engine, LLM runner, webhook server, cross-cutting discovery, and schema validation.
 - **CI workflow** (`.github/workflows/test.yml`) — runs pytest + BATS on push and PR.
 - **`pyproject.toml`** — dependency manifest with required (`pyyaml`) and optional groups (`api`, `webhook`, `dev`).
 

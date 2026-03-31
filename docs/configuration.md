@@ -96,6 +96,31 @@ relevant_pattern: "your-feature"
 
 A PR is classified as **MAYBE** if no file matches `relevant_paths` but a file path contains this substring. Useful for catching new packages not yet in the paths list.
 
+Glob patterns are supported in `relevant_paths`:
+
+```yaml
+relevant_paths:
+  - packages/components/my-feature-*/    # auto-discovers new packages
+  - packages/apps/my-feature/
+```
+
+### `cross_cutting_packages` (optional)
+
+Directories in other teams' packages that contain code referencing your feature. At sync time, autodocs greps these directories for `cross_cutting_identifiers` to dynamically discover integration points — no static file list to maintain.
+
+```yaml
+cross_cutting_packages:
+  - packages/components/shared-framework/src/
+  - packages/data/resolvers/shared-resolvers/src/
+
+cross_cutting_identifiers:
+  - "MyFeature"
+  - "myFeature"
+  - "my-feature"
+```
+
+Both fields must be present together. If a new file in a cross-cutting package starts referencing your feature, it's automatically discovered on the next run.
+
 ### `telemetry` (optional)
 
 Kusto telemetry configuration. Remove this section entirely to disable telemetry monitoring.
@@ -197,12 +222,15 @@ Enables Call 4: automatically apply CONFIDENT + VERIFIED suggestions to doc file
 ```yaml
 auto_pr:
   enabled: true
-  target_branch: "master"           # PR target branch
+  target_branch: "main"             # PR target branch
   branch_prefix: "autodocs/"        # Branch name: <prefix><YYYY-MM-DD>
-  work_item_ids: "12345"            # ADO work item ID(s) to link to each PR
+  work_item_ids: "12345"            # ADO work item ID(s) to link to each PR (optional)
+  reviewers:                         # Assigned to every autodocs PR (optional)
+    - "user@company.com"
+    - "user2@company.com"
 ```
 
-Requires `repo_path` on each doc entry (see docs section above) so the apply prompt knows where to find the files in the repo.
+Requires `repo_path` on each doc entry (see docs section above) so the apply prompt knows where to find the files in the repo. Reviewers are added via `gh pr edit` (GitHub), `az repos pr reviewer add` (ADO), or `glab mr update` (GitLab).
 
 ### `multi_model` (optional)
 

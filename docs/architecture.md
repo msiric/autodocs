@@ -17,10 +17,12 @@ autodocs-sync.sh → orchestrator.py
     ├── Open PR limit check
     |
     ├── Step 1: Sync (deterministic Python — sync_engine.py)
+    |   ├── Expand glob patterns in relevant_paths
+    |   ├── Discover cross-cutting files via grep (dynamic, zero-config)
     |   ├── Discover relevant PRs via git log + path filter
     |   ├── Fetch PR details from platform API (relevant PRs only)
     |   ├── Get changed files via git diff-tree
-    |   ├── Get targeted diffs for mapped files
+    |   ├── Get targeted diffs (mapped + unmapped-but-relevant files)
     |   ├── Fetch review threads for relevant PRs
     |   └── Write: daily-report.md, activity-log.md
     |

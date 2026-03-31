@@ -79,12 +79,26 @@ team_members:
 # ---------------------------------------------------------------------------
 relevant_paths:
   - packages/your-feature/
-  - packages/components/your-feature-hooks/
+  - packages/components/your-feature-*/     # glob: auto-discovers new packages
   # Add all package paths that belong to your feature area
 
 # Catch-all substring for files not covered by relevant_paths.
 # Matched as a case-insensitive substring against each file path (not glob).
 relevant_pattern: "your-feature"
+
+# ---------------------------------------------------------------------------
+# Cross-cutting dependency tracking (optional)
+# Packages owned by other teams that contain code referencing your feature.
+# At sync time, these are grepped for the identifiers to dynamically discover
+# integration points. No static file list to maintain.
+# ---------------------------------------------------------------------------
+# cross_cutting_packages:
+#   - packages/components/shared-framework/src/
+#   - packages/data/resolvers/shared-resolvers/src/
+# cross_cutting_identifiers:
+#   - "YourFeature"
+#   - "yourFeature"
+#   - "your-feature"
 
 # ---------------------------------------------------------------------------
 # Exclude patterns (optional)
@@ -167,6 +181,9 @@ docs:
 #   target_branch: "main"              # GitHub default: "main", ADO default: "master"
 #   branch_prefix: "autodocs/"
 #   work_item_ids: "12345"             # ADO work item IDs (optional, ADO only)
+#   reviewers:                          # Auto-assigned to every autodocs PR (optional)
+#     - "user@company.com"
+#     - "user2@company.com"
 
 # ---------------------------------------------------------------------------
 # Multi-model verification (optional)
