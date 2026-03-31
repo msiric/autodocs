@@ -13,6 +13,8 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.request
+import urllib.error
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -591,26 +593,24 @@ def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
         token = os.environ.get("BITBUCKET_TOKEN", "")
         if not ws or not repo or not token:
             return None
-        pr_json = json.dumps({
+        pr_body = {
             "title": title,
             "source": {"branch": {"name": branch}},
             "destination": {"branch": {"name": target}},
             "description": body,
+        }
+        url = f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}/pullrequests"
+        data = json.dumps(pr_body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST", headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
         })
-        result = subprocess.run(
-            ["curl", "-s", "-X", "POST",
-             "-H", f"Authorization: Bearer {token}",
-             "-H", "Content-Type: application/json",
-             "-d", pr_json,
-             f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}/pullrequests"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            try:
-                data = json.loads(result.stdout)
-                return data.get("id")
-            except (json.JSONDecodeError, ValueError):
-                pass
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+                return result.get("id")
+        except (urllib.error.URLError, json.JSONDecodeError, OSError):
+            pass
 
     elif platform == "ado":
         ado = config.get("ado", {})
@@ -824,11 +824,14 @@ def deterministic_apply(config: dict, output_dir: Path, repo_dir: Path) -> Apply
     # Filter by verification gates
     applicable, skipped = filter_suggestions(suggestions, output_dir)
 
-    # Build doc name → repo path mapping
+    # Build doc name → repo path mapping (validate paths stay within repo)
     doc_paths: dict[str, Path] = {}
     for doc in config.get("docs") or []:
         if doc.get("repo_path"):
-            doc_paths[doc["name"]] = repo_dir / doc["repo_path"]
+            resolved = (repo_dir / doc["repo_path"]).resolve()
+            if not str(resolved).startswith(str(repo_dir.resolve())):
+                continue  # path traversal attempt — skip
+            doc_paths[doc["name"]] = resolved
 
     if not applicable and not skipped:
         return ApplyResult(success=True)

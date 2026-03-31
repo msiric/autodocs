@@ -15,9 +15,43 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+
+def _http_get_json(url: str, token: str) -> dict | list | None:
+    """HTTP GET with Bearer auth. Returns parsed JSON or None on failure.
+
+    Uses urllib instead of curl subprocess to avoid leaking the token
+    in the process list (visible via ps aux on shared systems).
+    """
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _http_post_json(url: str, token: str, body: dict) -> dict | None:
+    """HTTP POST with Bearer auth. Returns parsed JSON or None on failure."""
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
+        return None
 
 
 @dataclass
@@ -75,20 +109,26 @@ def expand_relevant_paths(repo_dir: Path, relevant_paths: list[str]) -> list[str
     expanded: list[str] = []
     seen: set[str] = set()
 
+    repo_resolved = repo_dir.resolve()
     for rp in relevant_paths:
         if "*" in rp or "?" in rp:
             # Glob pattern — expand against filesystem
             for match in sorted(repo_dir.glob(rp.rstrip("/"))):
+                # Validate expanded path stays within repo (prevent traversal)
+                if not str(match.resolve()).startswith(str(repo_resolved)):
+                    continue
+                try:
+                    rel = str(match.relative_to(repo_dir))
+                except ValueError:
+                    continue
+                if rel in seen:
+                    continue
                 if match.is_dir():
-                    rel = str(match.relative_to(repo_dir))
-                    if rel not in seen:
-                        expanded.append(rel + "/")
-                        seen.add(rel)
+                    expanded.append(rel + "/")
+                    seen.add(rel)
                 elif match.is_file():
-                    rel = str(match.relative_to(repo_dir))
-                    if rel not in seen:
-                        expanded.append(rel)
-                        seen.add(rel)
+                    expanded.append(rel)
+                    seen.add(rel)
         else:
             if rp not in seen:
                 expanded.append(rp)
@@ -321,22 +361,17 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
         token = os.environ.get("BITBUCKET_TOKEN", "")
         if not ws or not repo or not token:
             return None
-        result = subprocess.run(
-            ["curl", "-s", "-H", f"Authorization: Bearer {token}",
-             f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}/pullrequests/{pr_number}"],
-            capture_output=True, text=True,
+        data = _http_get_json(
+            f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}/pullrequests/{pr_number}",
+            token,
         )
-        if result.returncode != 0:
+        if not data or not isinstance(data, dict):
             return None
-        try:
-            data = json.loads(result.stdout)
-            return {
-                "title": _sanitize_title(data.get("title", "")),
-                "description": _truncate_desc(data.get("description") or ""),
-                "author": data.get("author", {}).get("nickname", ""),
-            }
-        except (json.JSONDecodeError, ValueError):
-            return None
+        return {
+            "title": _sanitize_title(data.get("title", "")),
+            "description": _truncate_desc(data.get("description") or ""),
+            "author": data.get("author", {}).get("nickname", ""),
+        }
 
     return None
 
@@ -455,17 +490,14 @@ def _fetch_bitbucket(config: dict, lookback: str) -> FetchResult:
         return FetchResult(error="bitbucket.workspace and bitbucket.repo required in config")
     if not token:
         return FetchResult(error="BITBUCKET_TOKEN environment variable not set")
-    result = subprocess.run(
-        ["curl", "-s", "-H", f"Authorization: Bearer {token}",
-         f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}"
-         f"/pullrequests?state=MERGED&pagelen=50&sort=-updated_on"],
-        capture_output=True, text=True,
+    data = _http_get_json(
+        f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}"
+        f"/pullrequests?state=MERGED&pagelen=50&sort=-updated_on",
+        token,
     )
-    if result.returncode != 0:
-        return _classify_cli_error("curl", result)
-    try:
-        data = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
+    if data is None:
+        return FetchResult(error="Bitbucket API request failed", retryable=True)
+    if not isinstance(data, dict):
         return FetchResult(error="Bitbucket API returned malformed JSON")
     prs = []
     for pr in data.get("values", []):
@@ -719,17 +751,12 @@ def _fetch_bitbucket_comments(config: dict, pr_id: int) -> list[dict]:
     token = os.environ.get("BITBUCKET_TOKEN", "")
     if not ws or not repo or not token:
         return []
-    result = subprocess.run(
-        ["curl", "-s", "-H", f"Authorization: Bearer {token}",
-         f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}"
-         f"/pullrequests/{pr_id}/comments?pagelen=50"],
-        capture_output=True, text=True,
+    data = _http_get_json(
+        f"https://api.bitbucket.org/2.0/repositories/{ws}/{repo}"
+        f"/pullrequests/{pr_id}/comments?pagelen=50",
+        token,
     )
-    if result.returncode != 0:
-        return []
-    try:
-        data = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
+    if not data or not isinstance(data, dict):
         return []
     reviews = []
     for comment in data.get("values", []):
@@ -1056,13 +1083,16 @@ def deterministic_sync(
             for pr in prs:
                 pr["classification"] = "YES"
                 pr["classification_label"] = feature_name
-            # Enrich with platform API details (best-effort)
-            for pr in prs:
+            # Enrich with platform API details (best-effort, parallel)
+            from concurrent.futures import ThreadPoolExecutor
+            def _enrich(pr: dict) -> None:
                 details = fetch_pr_details(config, pr["number"])
                 if details:
                     pr["title"] = details.get("title") or pr["title"]
                     pr["description"] = details.get("description") or pr["description"]
                     pr["author"] = details.get("author") or pr["author"]
+            with ThreadPoolExecutor(max_workers=min(8, len(prs))) as pool:
+                list(pool.map(_enrich, prs))
 
     if not prs:
         # Fallback: platform API fetch (no relevant_paths, shallow clone, etc.)
