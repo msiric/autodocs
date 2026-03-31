@@ -30,6 +30,8 @@ autodocs-sync.sh → orchestrator.py
     ├── drift-helper.py      (Python: parse, group, dedup, lifecycle)
     ├── Log match rate metric
     |
+    ├── (skip Steps 2-4 if no feature PRs found — zero LLM cost)
+    |
     ├── Step 2: Drift (LLM — Read/Write tools only)
     |   ├── Read drift-context.json (pre-processed)
     |   └── Write: drift-report.md, drift-status.md, drift-log.md
