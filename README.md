@@ -16,7 +16,7 @@ Your repo (git)         GitHub / ADO / GitLab / Bitbucket    LLM (Claude)
      |    A/M/D/R + diffs)   |                                    |
      v                       v                                    v
   +---------------------------------------------------------+
-  |                    autodocs pipeline                     |
+  |                    autodocs pipeline                    |
   |                                                         |
   |  Step 1: Sync (deterministic Python)                    |
   |  - Discover relevant PRs via git log + path filter      |
@@ -32,7 +32,7 @@ Your repo (git)         GitHub / ADO / GitLab / Bitbucket    LLM (Claude)
   |  - Detect unmapped files (new code not in docs)         |
   |  - Write: drift-report.md, drift-status.md, drift-log   |
   |                                                         |
-  |  Step 3: Suggest + Changelog (LLM, if drift found)     |
+  |  Step 3: Suggest + Changelog (LLM, if drift found)      |
   |  - Read flagged sections from your actual docs          |
   |  - Generate FIND/REPLACE edit suggestions (verified)    |
   |  - Write changelog entries capturing WHY things changed |
