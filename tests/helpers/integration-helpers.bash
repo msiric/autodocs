@@ -97,6 +97,8 @@ create_sync_fixtures() {
   # discovers it via git log. This replaces the old mock-Claude fixtures.
   (
     cd "$TEST_DIR/repo"
+    git config user.email "test@test.com"
+    git config user.name "Test"
     mkdir -p src/auth
     echo "v1" > src/auth/handler.ts
     git add . && git commit -q -m "init"
