@@ -21,7 +21,9 @@ jobs:
         run: pip install -e ".[dev,webhook]"
 
       - name: Install BATS
-        run: sudo apt-get update && sudo apt-get install -y bats
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats
+          sudo /tmp/bats/install.sh /usr/local
 
       - name: Run pytest
         run: pytest tests/ -v
