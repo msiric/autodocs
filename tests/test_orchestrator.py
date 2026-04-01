@@ -284,9 +284,13 @@ class TestAdvanceTimestamp:
         scripts = Path(__file__).parent.parent / "scripts"
         return Orchestrator(output_dir, output_dir, config, ClaudeRunner(), logger, scripts)
 
+    def _write_report(self, output_dir: Path, feature_prs: int):
+        (output_dir / "daily-report.md").write_text(
+            f"---\nfeature_prs: {feature_prs}\n---\n"
+        )
+
     def test_advances_on_success_with_relevant(self, output_dir: Path, minimal_config: dict):
-        context = {"summary": {"relevant_count": 2, "pr_count": 3}}
-        (output_dir / "drift-context.json").write_text(json.dumps(context))
+        self._write_report(output_dir, feature_prs=2)
         orch = self._make_orchestrator(output_dir, minimal_config)
         orch.status["sync"] = "success"
         orch.status["drift"] = "success"
@@ -294,30 +298,30 @@ class TestAdvanceTimestamp:
         assert (output_dir / "last-successful-run").exists()
 
     def test_no_advance_on_drift_failure(self, output_dir: Path, minimal_config: dict):
+        self._write_report(output_dir, feature_prs=1)
         orch = self._make_orchestrator(output_dir, minimal_config)
         orch.status["sync"] = "success"
         orch.status["drift"] = "failed"
         orch._advance_timestamp()
         assert not (output_dir / "last-successful-run").exists()
 
-    def test_no_advance_zero_relevant(self, output_dir: Path, minimal_config: dict):
-        context = {"summary": {"relevant_count": 0, "pr_count": 5}}
-        (output_dir / "drift-context.json").write_text(json.dumps(context))
+    def test_advances_on_drift_skipped(self, output_dir: Path, minimal_config: dict):
+        self._write_report(output_dir, feature_prs=0)
         orch = self._make_orchestrator(output_dir, minimal_config)
         orch.status["sync"] = "success"
-        orch.status["drift"] = "success"
+        orch.status["drift"] = "skipped"
         orch._advance_timestamp()
-        assert not (output_dir / "last-successful-run").exists()
+        # Drift skipped (no feature PRs) should still advance
+        assert (output_dir / "last-successful-run").exists()
 
     def test_advances_on_empty_window(self, output_dir: Path, minimal_config: dict):
-        context = {"summary": {"relevant_count": 0, "pr_count": 0}}
-        (output_dir / "drift-context.json").write_text(json.dumps(context))
+        self._write_report(output_dir, feature_prs=0)
         orch = self._make_orchestrator(output_dir, minimal_config)
         orch.status["sync"] = "success"
         orch.status["drift"] = "success"
         orch._advance_timestamp()
-        # Empty window (0 PRs total) should still advance
-        assert (output_dir / "last-successful-run").exists()
+        # No feature PRs but drift ran successfully → advance
+        assert not (output_dir / "last-successful-run").exists()
 
 
 # ---------------------------------------------------------------------------

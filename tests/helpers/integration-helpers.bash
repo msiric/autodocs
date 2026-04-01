@@ -92,19 +92,20 @@ read_status() {
 
 create_sync_fixtures() {
   create_scenario sync 0
-  add_fixture sync daily-report.md "---
-date: 2026-03-05
-sync_status: success
-pr_count: 1
-feature_prs: 1
----
-# Work Report
-## Team PRs (last 24h)
-- PR #1: \"Test PR\" by Alice — merged
-  API: YES (src/)
-  Files:
-    M src/auth/handler.ts
-"
+
+  # Create a real merge commit in the test repo so deterministic_sync
+  # discovers it via git log. This replaces the old mock-Claude fixtures.
+  (
+    cd "$TEST_DIR/repo"
+    mkdir -p src/auth
+    echo "v1" > src/auth/handler.ts
+    git add . && git commit -q -m "init"
+    git checkout -q -b feat/test-pr
+    echo "v2" > src/auth/handler.ts
+    git add . && git commit -q -m "update auth handler"
+    git checkout -q main 2>/dev/null || git checkout -q master
+    git merge --no-ff -q feat/test-pr -m "Merge pull request #1 from test/feat/test-pr"
+  )
 }
 
 create_drift_fixtures() {

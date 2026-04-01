@@ -578,23 +578,24 @@ class Orchestrator:
         if self.status["sync"] != "success" or self.status["drift"] == "failed":
             return
 
-        relevant_count = 0
-        pr_count = 0
-        context_text = self.storage.read("drift-context.json")
-        if context_text:
-            try:
-                data = json.loads(context_text)
-                relevant_count = data.get("summary", {}).get("relevant_count", 0)
-                pr_count = data.get("summary", {}).get("pr_count", 0)
-            except (json.JSONDecodeError, ValueError):
-                pass
+        # Read feature PR count from daily report (authoritative source)
+        feature_prs = 0
+        report_text = self.storage.read("daily-report.md") or ""
+        for line in report_text.splitlines():
+            if line.startswith("feature_prs:"):
+                try:
+                    feature_prs = int(line.split(":")[1].strip())
+                except (ValueError, IndexError):
+                    pass
+                break
 
-        if relevant_count > 0 or pr_count == 0:
+        if feature_prs > 0 or self.status["drift"] == "skipped":
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             self.storage.write("last-successful-run", ts)
         else:
             self.logger.log(
-                f"WARN: {pr_count} PRs found, 0 relevant. Timestamp not advanced."
+                f"WARN: {feature_prs} feature PRs but drift didn't find relevant changes. "
+                "Timestamp not advanced."
             )
 
 
