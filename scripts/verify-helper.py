@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -175,30 +176,110 @@ def strip_code_comments(text: str) -> str:
     return text
 
 
+def _config_search_paths(config: dict, repo_dir: Path) -> list[Path]:
+    """Resolve relevant_paths + cross_cutting_packages to repo-relative directories.
+
+    Used as a fallback when source-context/ doesn't contain the identifier
+    being verified. source-context is curated for the LLM (context-window
+    constrained); the verifier needs broader ground truth.
+    """
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(rel: str) -> None:
+        if not rel or rel in seen:
+            return
+        full = (repo_dir / rel).resolve()
+        # Ensure resolved path stays within repo (prevent traversal)
+        try:
+            full.relative_to(repo_dir.resolve())
+        except ValueError:
+            return
+        if full.exists():
+            seen.add(rel)
+            paths.append(full)
+
+    # relevant_paths may contain glob patterns — expand
+    for rp in config.get("relevant_paths") or []:
+        rp = rp.rstrip("/")
+        if "*" in rp or "?" in rp:
+            for match in repo_dir.glob(rp):
+                try:
+                    rel = str(match.relative_to(repo_dir))
+                    _add(rel)
+                except ValueError:
+                    continue
+        else:
+            _add(rp)
+
+    # cross_cutting_packages: literal directory paths
+    for pkg in config.get("cross_cutting_packages") or []:
+        _add(pkg.rstrip("/"))
+
+    return paths
+
+
+def _value_in_repo(value: str, search_paths: list[Path]) -> str | None:
+    """Search repo for a literal value. Returns the file path if found, else None.
+
+    Uses `grep -lF` (fixed string, list files only, recursive) for speed on
+    large monorepos. Fast even on thousands of files because grep stops at
+    the first match per file and we stop at the first matching path.
+    """
+    if not value or not search_paths:
+        return None
+    for path in search_paths:
+        result = subprocess.run(
+            ["grep", "-rlF", "-e", value, str(path)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # Return first matching file (repo-relative if possible)
+            first = result.stdout.strip().splitlines()[0]
+            return first
+    return None
+
+
 def verify_replaces(output_dir: str | Path, repo_dir: str | Path | None = None) -> bool:
     """Verify REPLACE text values against source code files.
 
     For each suggestion, extracts concrete values from REPLACE text and checks
-    them against the source files in source-context/. Three outcomes per value:
-    EVIDENCED (found), MISMATCH (contradicted), UNVERIFIED (not found, not contradicted).
+    them against:
+    1. source-context/ (curated subset, primary check)
+    2. relevant_paths + cross_cutting_packages in the repo (fallback)
+
+    Three outcomes per value: EVIDENCED (found), MISMATCH (contradicted),
+    UNVERIFIED (not found, not contradicted).
     """
     output_dir = Path(output_dir)
     suggestions_path = output_dir / "drift-suggestions.md"
     source_dir = output_dir / "source-context"
 
-    if not suggestions_path.exists() or not source_dir.exists():
+    if not suggestions_path.exists():
         return True
 
     # Load all source files (stripped of comments), walking directory tree
-    source_corpus = {}
-    for src_file in source_dir.rglob("*"):
-        if src_file.is_file():
-            rel_name = str(src_file.relative_to(source_dir))
-            source_corpus[rel_name] = strip_code_comments(
-                src_file.read_text(encoding="utf-8", errors="replace")
-            )
+    source_corpus: dict[str, str] = {}
+    if source_dir.exists():
+        for src_file in source_dir.rglob("*"):
+            if src_file.is_file():
+                rel_name = str(src_file.relative_to(source_dir))
+                source_corpus[rel_name] = strip_code_comments(
+                    src_file.read_text(encoding="utf-8", errors="replace")
+                )
 
-    if not source_corpus:
+    # Resolve repo-wide search paths for fallback verification
+    repo_search_paths: list[Path] = []
+    if repo_dir:
+        config_path = output_dir / "config.yaml"
+        if config_path.exists():
+            try:
+                config = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace")) or {}
+                repo_search_paths = _config_search_paths(config, Path(repo_dir))
+            except yaml.YAMLError:
+                pass
+
+    if not source_corpus and not repo_search_paths:
         return True
 
     combined_source = "\n".join(source_corpus.values())
@@ -234,7 +315,9 @@ def verify_replaces(output_dir: str | Path, repo_dir: str | Path | None = None) 
                 if current_replace and current_doc:
                     replace_text = "\n".join(current_replace)
                     values = _extract_values(replace_text)
-                    verified = _verify_values(values, combined_source, source_corpus, repo_dir)
+                    verified = _verify_values(
+                        values, combined_source, source_corpus, repo_dir, repo_search_paths,
+                    )
                     gate = _gate_decision(verified)
                     results.append({
                         "doc": current_doc,
@@ -247,7 +330,9 @@ def verify_replaces(output_dir: str | Path, repo_dir: str | Path | None = None) 
     if in_replace and current_replace and current_doc:
         replace_text = "\n".join(current_replace)
         values = _extract_values(replace_text)
-        verified = _verify_values(values, combined_source, source_corpus, repo_dir)
+        verified = _verify_values(
+            values, combined_source, source_corpus, repo_dir, repo_search_paths,
+        )
         gate = _gate_decision(verified)
         results.append({
             "doc": current_doc,
@@ -280,12 +365,23 @@ def _extract_values(replace_text: str) -> list[dict[str, str]]:
     return values
 
 
-def _verify_values(values: list[dict[str, str]], combined_source: str, source_corpus: dict[str, str], repo_dir: str | Path | None = None) -> list[dict[str, str]]:
-    """Verify each value against source corpus. Returns list with status."""
+def _verify_values(
+    values: list[dict[str, str]],
+    combined_source: str,
+    source_corpus: dict[str, str],
+    repo_dir: str | Path | None = None,
+    repo_search_paths: list[Path] | None = None,
+) -> list[dict[str, str]]:
+    """Verify each value against source corpus, with repo-wide fallback.
+
+    Search order: source-context (fast, in-memory) → repo paths (slower grep).
+    Only marks MISMATCH if the value isn't found in EITHER scope, preventing
+    false positives when source-context lacks files that contain the value.
+    """
     results = []
+    repo_search_paths = repo_search_paths or []
     for v in values:
         val = v["value"]
-        found_in = None
 
         # File paths (detected by "/" in value): verify by repo existence
         if "/" in val and repo_dir and re.match(r"[\w.-]+/[\w/.-]+\.\w+$", val):
@@ -303,7 +399,8 @@ def _verify_values(values: list[dict[str, str]], combined_source: str, source_co
                 })
             continue
 
-        # Search each source file for string values
+        # Primary search: source-context (in-memory)
+        found_in = None
         for filename, content in source_corpus.items():
             if val in content:
                 found_in = filename
@@ -311,26 +408,32 @@ def _verify_values(values: list[dict[str, str]], combined_source: str, source_co
 
         if found_in:
             results.append({
-                "value": val,
-                "type": v["type"],
-                "status": "EVIDENCED",
-                "source": found_in,
+                "value": val, "type": v["type"],
+                "status": "EVIDENCED", "source": found_in,
+            })
+            continue
+
+        # Fallback search: repo-wide grep (only if source-context didn't find it)
+        repo_match = _value_in_repo(val, repo_search_paths)
+        if repo_match:
+            results.append({
+                "value": val, "type": v["type"],
+                "status": "EVIDENCED", "source": f"repo:{repo_match}",
+            })
+            continue
+
+        # Not found anywhere — MISMATCH if code-like, UNVERIFIED otherwise
+        if _is_code_reference(val, v["type"]):
+            results.append({
+                "value": val, "type": v["type"],
+                "status": "MISMATCH",
+                "reason": f"'{val}' not found in any source file",
             })
         else:
-            # Determine severity: MISMATCH (block) vs UNVERIFIED (review)
-            if _is_code_reference(val, v["type"]):
-                results.append({
-                    "value": val,
-                    "type": v["type"],
-                    "status": "MISMATCH",
-                    "reason": f"'{val}' not found in any source file",
-                })
-            else:
-                results.append({
-                    "value": val,
-                    "type": v["type"],
-                    "status": "UNVERIFIED",
-                })
+            results.append({
+                "value": val, "type": v["type"],
+                "status": "UNVERIFIED",
+            })
     return results
 
 
