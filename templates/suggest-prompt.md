@@ -110,12 +110,11 @@ If you cannot determine what specifically needs updating, generate a REVIEW sugg
 
 ## Step 4: Generate Changelog Entries
 
-For each suggestion from Step 3, create a changelog entry:
+For each suggestion from Step 3, create a changelog entry with:
 - **Changed**: What changed, stated factually (e.g., "renamed handleError to classifyError", "added retry logic for file creation timeout")
 - **Why**: From the PR description, summarize WHY the change was made in 1-2 sentences. If no description is available, write "No PR description provided."
-- **PR reference**: PR number, author name, and the PR's merge date.
 
-**Author lookup:** For the author name, look up the PR number in `suggest-context.json` at the `pr_authors` map (key = PR number, value = author email or display name). If a PR number is missing from that map, also check `daily-report.md` for the line `- PR #<id>: "..." by <author> — merged` and use the author there. NEVER write `(unknown)` for the author — if the author is genuinely unavailable, write `(no author recorded)` instead so a human can spot the gap.
+**PR metadata lookup:** Look up each PR in `suggest-context.json` at the `pr_meta` map (key = PR number string, value = `{author, title, url}`). Use these values to build the entry header. If a PR number is missing from `pr_meta`, also check `daily-report.md` for the line `- PR #<id>: "<title>" by <author> — merged`. NEVER write `(unknown)` — if a field is genuinely unavailable, write `(no <field> recorded)` instead so a human can spot the gap.
 
 ## Step 5: Write Output
 
@@ -178,7 +177,8 @@ Format:
 
 ## <Section Name>
 
-### YYYY-MM-DD — PR #<id> by <author>
+### YYYY-MM-DD — [PR #<id>](<url>) by <author>
+**Title:** <PR title>
 **Changed:** <what changed, factual>
 **Why:** <from PR description, 1-2 sentences>
 
@@ -188,7 +188,8 @@ Format:
 
 ## <Another Section Name>
 
-### YYYY-MM-DD — PR #<id> by <author>
+### YYYY-MM-DD — [PR #<id>](<url>) by <author>
+**Title:** <PR title>
 **Changed:** <what changed>
 **Why:** <why>
 

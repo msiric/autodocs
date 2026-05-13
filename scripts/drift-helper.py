@@ -691,10 +691,10 @@ def pre_process(output_dir: str | Path) -> None:
 def suggest_dedup(output_dir: str | Path) -> None:
     """Run suggest dedup. Write suggest-context.json.
 
-    Also exposes a pr_authors map (PR number → author) so the suggest LLM
-    can write accurate `by <author>` lines in changelog entries. Without
-    this, the LLM would fall back to '(unknown)' because drift-status.md
-    only contains trigger PR numbers — not author info.
+    Exposes a `pr_meta` map (PR number → {author, title, url}) so the
+    suggest LLM can write rich, accurately-attributed changelog entries
+    with clickable PR links. Without this, the LLM would have only PR
+    numbers from drift-status.md and would fall back to placeholder values.
     """
     output_dir = Path(output_dir)
 
@@ -702,13 +702,26 @@ def suggest_dedup(output_dir: str | Path) -> None:
     changelog_entries = parse_changelog_entries(output_dir)
     pending = get_pending_sections(output_dir)
 
-    # Build PR-number → author map for changelog attribution
+    # Build PR-number → {author, title, url} map for changelog attribution.
+    # Lazy import keeps drift-helper standalone-runnable for tests that
+    # don't exercise platform-specific URL construction.
+    from platform_helper import build_pr_url
+    config_path = output_dir / "config.yaml"
+    config = (
+        yaml.safe_load(config_path.read_text()) or {}
+        if config_path.exists() else {}
+    )
     report = parse_report(output_dir / "daily-report.md")
-    pr_authors = {
-        pr["number"]: pr.get("author", "")
-        for pr in report.get("prs", [])
-        if pr.get("author")
-    }
+    pr_meta: dict[str, dict[str, str]] = {}
+    for pr in report.get("prs", []):
+        number = pr.get("number")
+        if not number:
+            continue
+        pr_meta[str(number)] = {
+            "author": pr.get("author", ""),
+            "title": pr.get("title", ""),
+            "url": build_pr_url(config, number),
+        }
 
     actionable = []
     skipped = []
@@ -756,7 +769,7 @@ def suggest_dedup(output_dir: str | Path) -> None:
         "actionable_alerts": actionable,
         "skipped": skipped,
         "changelog_warnings": changelog_warnings,
-        "pr_authors": pr_authors,
+        "pr_meta": pr_meta,
     }
 
     (output_dir / "suggest-context.json").write_text(

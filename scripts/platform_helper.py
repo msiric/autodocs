@@ -57,6 +57,51 @@ def _ado_parts(repo_id: str | None) -> tuple[str, str, str] | None:
     return f"https://dev.azure.com/{parts[0]}", parts[1], parts[2]
 
 
+def build_pr_url(config: dict, pr_number: int | str) -> str:
+    """Build the canonical web URL for a PR on the configured platform.
+
+    Returns an empty string if config is incomplete for URL construction.
+    Used for changelog entries — gives reviewers a clickable PR reference.
+    """
+    if not pr_number:
+        return ""
+    platform = config.get("platform", "")
+
+    if platform == "github":
+        owner = config.get("github", {}).get("owner", "")
+        repo = config.get("github", {}).get("repo", "")
+        if owner and repo:
+            return f"https://github.com/{owner}/{repo}/pull/{pr_number}"
+
+    elif platform == "gitlab":
+        # project_path is "group/project" or "group/subgroup/project"
+        project_path = config.get("gitlab", {}).get("project_path", "")
+        host = config.get("gitlab", {}).get("host", "gitlab.com")
+        if project_path:
+            return f"https://{host}/{project_path}/-/merge_requests/{pr_number}"
+
+    elif platform == "bitbucket":
+        ws = config.get("bitbucket", {}).get("workspace", "")
+        repo = config.get("bitbucket", {}).get("repo", "")
+        if ws and repo:
+            return f"https://bitbucket.org/{ws}/{repo}/pull-requests/{pr_number}"
+
+    elif platform == "ado":
+        ado = config.get("ado", {})
+        org = ado.get("org", "")
+        project = ado.get("project", "")
+        repo = ado.get("repo", "")
+        if org and project and repo:
+            # Matches the canonical web URL pattern used by ADO,
+            # e.g. https://domoreexp.visualstudio.com/Teamspace/_git/<repo>/pullrequest/<n>
+            return (
+                f"https://{org}.visualstudio.com/{project}"
+                f"/_git/{repo}/pullrequest/{pr_number}"
+            )
+
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # PR discovery and state checking
 # ---------------------------------------------------------------------------

@@ -439,11 +439,17 @@ EOF
   [ "$actionable" = "1" ]
 }
 
-@test "suggest-dedup exposes pr_authors map for changelog attribution" {
-  # Build a daily-report.md with PRs that have authors, then verify the
-  # generated suggest-context.json carries the author info forward.
-  # Without this, the suggest LLM writes 'by (unknown)' in every changelog
-  # entry because drift-status.md only contains trigger PR numbers.
+@test "suggest-dedup exposes pr_meta map with author/title/url for changelog" {
+  # Build a daily-report.md with PRs, then verify the generated
+  # suggest-context.json carries author + title + url forward.
+  # Without this, the suggest LLM writes 'by (unknown)' in changelog entries.
+  cat > "$TEST_DIR/config.yaml" <<EOF
+platform: ado
+ado:
+  org: myorg
+  project: MyProject
+  repo: myrepo
+EOF
   cat > "$TEST_DIR/daily-report.md" <<EOF
 ---
 date: 2026-05-13
@@ -469,16 +475,19 @@ EOF
 
   python3 "$HELPER" suggest-dedup "$TEST_DIR"
 
-  # pr_authors should map both PR numbers to their authors
-  has_authors=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_authors' in d)")
-  [ "$has_authors" = "True" ]
-  author_1561672=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_authors'].get('1561672', ''))")
+  # pr_meta must contain entries for both PRs with author/title/url
+  has_meta=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_meta' in d)")
+  [ "$has_meta" = "True" ]
+  author_1561672=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_meta']['1561672']['author'])")
   [ "$author_1561672" = "figavre@microsoft.com" ]
-  author_1557509=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_authors'].get('1557509', ''))")
-  [ "$author_1557509" = "marioiri@microsoft.com" ]
+  title_1557509=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_meta']['1557509']['title'])")
+  [ "$title_1557509" = "Add unified EntityType.pages" ]
+  url_1561672=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_meta']['1561672']['url'])")
+  [[ "$url_1561672" == *"myorg.visualstudio.com"* ]]
+  [[ "$url_1561672" == *"/pullrequest/1561672" ]]
 }
 
-@test "suggest-dedup pr_authors handles missing daily-report gracefully" {
+@test "suggest-dedup pr_meta handles missing daily-report gracefully" {
   cat > "$TEST_DIR/drift-status.md" <<EOF
 # Active Drift Alerts
 
@@ -488,10 +497,10 @@ EOF
 
   python3 "$HELPER" suggest-dedup "$TEST_DIR"
 
-  has_authors=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_authors' in d)")
-  [ "$has_authors" = "True" ]
+  has_meta=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_meta' in d)")
+  [ "$has_meta" = "True" ]
   # No PRs known → empty map (not crash)
-  count=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['pr_authors']))")
+  count=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['pr_meta']))")
   [ "$count" = "0" ]
 }
 
