@@ -58,8 +58,15 @@ def parse_report(report_path: Path) -> dict:
     current_pr = None
     in_files = False
     for line in text.splitlines():
-        # PR header: - PR #123: "Title" by Author — merged (accepts any dash/quote variant)
-        pr_match = re.match(r'- PR #(\d+):\s*["\u201c\u201d\']*(.+?)["\u201c\u201d\']*\s*by\s+(.+?)\s*[\u2014\u2013\-]', line)
+        # PR header: - PR #123: "Title" by Author — merged.
+        # Title is greedily matched between paired quotes so it can contain
+        # " by " (real example: a PR titled "...requests by adding guard logic"
+        # previously had "by adding guard logic" leak into the author field
+        # because non-greedy title matching stopped at the first " by " inside it).
+        pr_match = re.match(
+            r'- PR #(\d+):\s*["\u201c](.+)["\u201d]\s+by\s+(.+?)\s*[\u2014\u2013\-]',
+            line,
+        )
         if pr_match:
             if current_pr:
                 result["prs"].append(current_pr)

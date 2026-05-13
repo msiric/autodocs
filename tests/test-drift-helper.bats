@@ -63,6 +63,31 @@ EOF
   [ "$result" = "42" ]
 }
 
+@test "pre-process parses title containing ' by ' without leaking into author" {
+  # A real PR title was "[Channel Pages] Prevent multiple concurrent...
+  # requests by adding guard logic". The previous non-greedy regex split
+  # the line at the first " by " (inside the title), leaving
+  # "adding guard logic\" by figavre@microsoft.com" as the author and
+  # corrupting every downstream consumer (pr_meta, changelog attribution).
+  cat > "$TEST_DIR/daily-report.md" <<EOF
+---
+date: 2026-05-13
+---
+## Team PRs (last 24h)
+- PR #1503202: "[Channel Pages] Prevent concurrent tab creation requests by adding guard logic" by figavre@microsoft.com — merged
+  Files:
+    M packages/components/components-channel-pages-hooks/src/use-tab-actions.ts
+EOF
+  touch "$TEST_DIR/resolved-mappings.md"
+
+  python3 "$HELPER" pre-process "$TEST_DIR"
+
+  title=$(python3 -c "import json;d=json.load(open('$TEST_DIR/drift-context.json'));print(d['prs'][0]['title'])")
+  author=$(python3 -c "import json;d=json.load(open('$TEST_DIR/drift-context.json'));print(d['prs'][0]['author'])")
+  [ "$title" = "[Channel Pages] Prevent concurrent tab creation requests by adding guard logic" ]
+  [ "$author" = "figavre@microsoft.com" ]
+}
+
 @test "pre-process extracts file change types" {
   cat > "$TEST_DIR/daily-report.md" <<EOF
 ---
@@ -1036,6 +1061,36 @@ EOF
 EOF
   python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
   grep -qF "by (unknown)" "$TEST_DIR/changelog-doc.md"
+}
+
+@test "normalize-changelog-attribution leaves multi-PR headers untouched (known LLM-violation case)" {
+  # The suggest prompt forbids grouping multiple PRs in one entry header,
+  # but the LLM has been observed to violate this for tightly-coupled
+  # pairs (e.g., revert + original). The normalizer treats these as
+  # opaque and leaves them alone — the right fix is to stop the LLM from
+  # producing them in the first place, not to invent ambiguous merged
+  # attribution. This test pins that contract.
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "500": {"author": "a@a.com", "title": "Original", "url": "https://ex/500"},
+    "501": {"author": "b@b.com", "title": "Revert", "url": "https://ex/501"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-doc.md" <<EOF
+# doc.md — Changelog
+
+## Section
+
+### 2026-05-13 — PR #501 / #500 by (unknown)
+**Changed:** Reverted then re-applied.
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  # Header preserved verbatim — no attribution invented
+  grep -qF "### 2026-05-13 — PR #501 / #500 by (unknown)" "$TEST_DIR/changelog-doc.md"
 }
 
 @test "normalize-changelog-attribution fills attribution when LLM omitted by-AUTHOR entirely" {

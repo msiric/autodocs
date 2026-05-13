@@ -110,7 +110,7 @@ If you cannot determine what specifically needs updating, generate a REVIEW sugg
 
 ## Step 4: Generate Changelog Entries
 
-For each suggestion from Step 3, write one changelog entry per triggering PR. The set of triggering PRs is `actionable_alerts[].pr_numbers` from `suggest-context.json` — there is no ambiguity, no need to re-derive it from prose. Each entry has:
+For each suggestion from Step 3, write one changelog entry per triggering PR. The set of triggering PRs is `actionable_alerts[].pr_numbers` from `suggest-context.json` — there is no ambiguity, no need to re-derive it from prose. **Do NOT group multiple PRs in a single entry header** (e.g., never write `PR #N1 / #N2`); each PR gets its own dated entry with its own attribution, even when the PRs are tightly related (a revert and its original, an A/B follow-up pair, etc.). Each entry has:
 - **Changed**: What changed, stated factually (e.g., "renamed handleError to classifyError", "added retry logic for file creation timeout")
 - **Why**: From the PR description, summarize WHY the change was made in 1-2 sentences. If no description is available, write "No PR description provided."
 
