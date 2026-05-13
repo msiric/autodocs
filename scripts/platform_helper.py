@@ -146,12 +146,13 @@ def check_pr_state(platform: str, repo_id: str | None, pr_number: int) -> str | 
                 if state in ("DECLINED", "SUPERSEDED"):
                     return "CLOSED"
     elif platform == "ado" and repo_id:
+        # 'az repos pr show' identifies PR by --id alone; rejects -p/--project.
         ado = _ado_parts(repo_id)
         if ado:
-            org_url, project, _repo = ado
+            org_url, _project, _repo = ado
             output = _run_cli([
                 "az", "repos", "pr", "show", "--id", str(pr_number),
-                "--org", org_url, "-p", project,
+                "--org", org_url,
                 "--query", "status", "-o", "tsv",
             ])
             if output == "completed":
@@ -236,9 +237,10 @@ def execute_stale_action(platform: str, repo_id: str | None, pr_number: int, act
                 f"/pullRequests/{pr}/threads?api-version=7.0",
             ])
         if action == "close":
+            # 'az repos pr update' identifies PR by --id alone; rejects -p.
             _run_cli([
                 "az", "repos", "pr", "update", "--id", pr,
-                "--org", org_url, "-p", project,
+                "--org", org_url,
                 "--status", "abandoned",
             ])
 

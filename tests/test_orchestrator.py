@@ -483,3 +483,58 @@ class TestSchemaValidation:
             "platform": "github", "github": {"owner": "x", "repo": "y"},
         }
         assert self.validate(config) == []
+
+
+# ---------------------------------------------------------------------------
+# fetch_pr_details — guards against ADO CLI argument regressions
+# ---------------------------------------------------------------------------
+
+class TestFetchPrDetailsAdoCommand:
+    """ADO PR-id-targeted commands ('show', 'update', 'reviewer add') do NOT
+    accept -p/--project. Only project-context commands (create, list) do.
+
+    Silently passing -p caused 'unrecognized arguments' errors, dropping
+    PR title/description/author enrichment. The daily report then showed
+    'by ' (empty author), and downstream changelog entries showed
+    'by (unknown)' for every entry.
+    """
+
+    def _capture(self, monkeypatch, config: dict):
+        """Run fetch_pr_details with subprocess.run captured."""
+        import subprocess
+        from sync_engine import fetch_pr_details
+        calls: list[list[str]] = []
+
+        class _Result:
+            returncode = 1  # force failure so the function returns None cleanly
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            return _Result()
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+        fetch_pr_details(config, pr_number=42)
+        return calls
+
+    def test_ado_pr_show_has_no_project_flag(self, monkeypatch):
+        """az repos pr show --id N must not include -p/--project."""
+        calls = self._capture(monkeypatch, {
+            "platform": "ado",
+            "ado": {"org": "myorg", "project": "MyProject"},
+        })
+        ado_calls = [c for c in calls if c[:4] == ["az", "repos", "pr", "show"]]
+        assert ado_calls, "expected an 'az repos pr show' call"
+        for cmd in ado_calls:
+            assert "-p" not in cmd, f"-p must not appear in: {cmd}"
+            assert "--project" not in cmd, f"--project must not appear in: {cmd}"
+            assert "--id" in cmd
+            assert "--org" in cmd
+
+    def test_ado_skips_when_no_org(self, monkeypatch):
+        calls = self._capture(monkeypatch, {
+            "platform": "ado",
+            "ado": {},  # missing org
+        })
+        assert calls == []

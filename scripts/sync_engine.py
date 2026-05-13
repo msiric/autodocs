@@ -323,14 +323,16 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
             return None
 
     if platform == "ado":
+        # 'az repos pr show' identifies PR by --id alone; rejects -p/--project.
+        # Same class of bug as 'az repos pr reviewer add' — see add_reviewers().
         ado = config.get("ado", {})
-        org, project = ado.get("org", ""), ado.get("project", "")
-        if not org or not project:
+        org = ado.get("org", "")
+        if not org:
             return None
         try:
             result = subprocess.run(
                 ["az", "repos", "pr", "show", "--id", str(pr_number),
-                 "--org", f"https://dev.azure.com/{org}", "-p", project,
+                 "--org", f"https://dev.azure.com/{org}",
                  "--query", "{title:title, description:description, author:createdBy.uniqueName}",
                  "-o", "json"],
                 capture_output=True, text=True,
