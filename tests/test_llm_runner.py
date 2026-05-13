@@ -40,6 +40,28 @@ class TestCreateRunner:
         assert isinstance(runner, APIRunner)
         assert runner.default_model == "claude-opus-4-0-20250514"
 
+    def test_default_temperature_is_zero(self):
+        # Documentation maintenance is a stability-first workload — same code
+        # should produce the same suggestions. The factory injects
+        # temperature=0 by default so deployments don't accidentally inherit
+        # the API's high default (verified to cause "5 vs 0 applied" variance).
+        cli = create_runner({})
+        assert cli.temperature == 0
+        api = create_runner({"llm": {"backend": "api"}})
+        assert api.temperature == 0
+
+    def test_explicit_temperature_is_passed(self):
+        cli = create_runner({"llm": {"temperature": 0.7}})
+        assert cli.temperature == 0.7
+        api = create_runner({"llm": {"backend": "api", "temperature": 0.5}})
+        assert api.temperature == 0.5
+
+    def test_explicit_null_temperature_falls_back_to_default(self):
+        # `llm.temperature: null` in YAML loads as None. Treat the same as
+        # absent — fall back to the default of 0 (not "leave unset").
+        cli = create_runner({"llm": {"temperature": None}})
+        assert cli.temperature == 0
+
 
 # ---------------------------------------------------------------------------
 # CLIRunner
@@ -84,6 +106,48 @@ class TestCLIRunner:
         assert "--append-system-prompt" in cmd
         assert "--model" in cmd
         assert mock_run.call_args[1]["cwd"] == "/wd"
+
+    @patch("llm_runner.subprocess.run")
+    def test_run_emits_settings_when_temperature_set(self, mock_run):
+        # The Claude Code CLI has no --temperature flag (verified empirically:
+        # `claude --help` lists no such option). The supported path is
+        # --settings '{"temperature": <val>}', which CLI honors — without it,
+        # SUGGEST runs at the API default (~1.0) and produces wildly variable
+        # output for identical input. The runner must emit --settings with
+        # JSON when temperature is configured.
+        import json
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        runner = CLIRunner(max_retries=1, temperature=0)
+        runner.run("p", "Read", ["/a"])
+        cmd = mock_run.call_args[0][0]
+        assert "--settings" in cmd
+        # Verify the JSON is well-formed and carries the exact value
+        idx = cmd.index("--settings")
+        payload = json.loads(cmd[idx + 1])
+        assert payload == {"temperature": 0}
+
+    @patch("llm_runner.subprocess.run")
+    def test_run_omits_settings_when_temperature_unset(self, mock_run):
+        # No --settings means "use Claude Code default". Important for not
+        # accidentally injecting JSON into deployments that haven't opted in.
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        runner = CLIRunner(max_retries=1, temperature=None)
+        runner.run("p", "Read", ["/a"])
+        cmd = mock_run.call_args[0][0]
+        assert "--settings" not in cmd
+
+    @patch("llm_runner.subprocess.run")
+    def test_check_auth_also_emits_settings(self, mock_run):
+        # Auth probe must use the same model parameters as real work so the
+        # probe accurately reflects whether the configured model is reachable.
+        import json
+        mock_run.return_value = MagicMock(returncode=0, stdout="OK")
+        runner = CLIRunner(temperature=0)
+        runner.check_auth("/repo")
+        cmd = mock_run.call_args[0][0]
+        assert "--settings" in cmd
+        idx = cmd.index("--settings")
+        assert json.loads(cmd[idx + 1]) == {"temperature": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +336,36 @@ class TestAPIRunnerLoop:
         messages = second_call[1]["messages"]
         tool_result = messages[-1]["content"][0]
         assert "outside" in tool_result["content"]
+
+    def test_temperature_passed_to_messages_create(self, tmp_path: Path):
+        # When llm.temperature is configured, every messages.create call must
+        # carry the value. Without this, SUGGEST runs at the Anthropic API
+        # default (high temperature) and produces wildly variable output for
+        # identical input — empirically observed today (5 vs 0 applied across
+        # two byte-identical runs).
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _text_response("Done.")
+        runner = APIRunner(api_key="test-key", temperature=0)
+        runner._client = mock_client
+
+        runner.run("test", "Read,Write", [str(tmp_path)])
+
+        kwargs = mock_client.messages.create.call_args[1]
+        assert kwargs["temperature"] == 0
+
+    def test_temperature_absent_when_not_configured(self, tmp_path: Path):
+        # If temperature is not set, do NOT inject the parameter — let the
+        # API default apply. Important for not silently changing behavior
+        # of deployments that haven't opted into the determinism contract.
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _text_response("Done.")
+        runner = APIRunner(api_key="test-key", temperature=None)
+        runner._client = mock_client
+
+        runner.run("test", "Read,Write", [str(tmp_path)])
+
+        kwargs = mock_client.messages.create.call_args[1]
+        assert "temperature" not in kwargs
 
     def test_max_rounds_exceeded(self, tmp_path: Path):
         mock_client = MagicMock()

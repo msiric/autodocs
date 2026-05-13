@@ -303,12 +303,14 @@ LLM backend configuration. Defaults to Claude Code CLI.
 llm:
   backend: "cli"                      # "cli" or "api"
   model: "claude-sonnet-4-20250514"   # Model for API backend (CLI uses its own model)
+  temperature: 0                      # 0..1; default 0 for stable, reproducible runs
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `backend` | `cli` | `cli` = Claude Code CLI (requires `claude` installed). `api` = Anthropic API (requires `ANTHROPIC_API_KEY` env var and `pip install anthropic`). |
 | `model` | `claude-sonnet-4-20250514` | Model ID for the API backend. Ignored when using CLI. |
+| `temperature` | `0` | Sampling temperature passed to every LLM call (both backends). Documentation maintenance is a stability-first workload, so the default is `0` — same input produces the same suggestions. The API backend sets the `temperature` parameter on `messages.create`; the CLI backend forwards via `--settings '{"temperature": <val>}'`. Raise to ~`0.3–0.7` only if a deployment genuinely benefits from sampling diversity. |
 
 Both backends provide full pipeline functionality. Sync and apply are deterministic Python regardless of backend. The LLM is only used for drift detection and suggestion generation (Read/Write tools).
 

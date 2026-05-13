@@ -50,9 +50,22 @@ class LLMRunner(ABC):
 class CLIRunner(LLMRunner):
     """Claude Code CLI backend. Supports all tools."""
 
-    def __init__(self, max_retries: int = 3, initial_delay: float = 5.0):
+    def __init__(
+        self,
+        max_retries: int = 3,
+        initial_delay: float = 5.0,
+        temperature: float | None = None,
+    ):
         self.max_retries = max_retries
         self.initial_delay = initial_delay
+        # When set, applied to every CLI invocation via `--settings`.
+        # None means "do not pass --settings" (use Claude Code's default).
+        self.temperature = temperature
+
+    def _settings_args(self) -> list[str]:
+        if self.temperature is None:
+            return []
+        return ["--settings", json.dumps({"temperature": self.temperature})]
 
     def run(
         self,
@@ -69,6 +82,7 @@ class CLIRunner(LLMRunner):
             cmd.extend(["--add-dir", d])
         cmd.extend(["--allowedTools", allowed_tools])
         cmd.extend(["--output-format", "text"])
+        cmd.extend(self._settings_args())
         if append_system:
             cmd.extend(["--append-system-prompt", append_system])
         if model:
@@ -95,9 +109,10 @@ class CLIRunner(LLMRunner):
         return last_rc, last_output
 
     def check_auth(self, working_dir: str) -> bool:
+        cmd = ["claude", "-p", "Reply with OK", "--output-format", "text"]
+        cmd.extend(self._settings_args())
         result = subprocess.run(
-            ["claude", "-p", "Reply with OK", "--output-format", "text"],
-            capture_output=True, text=True, cwd=working_dir,
+            cmd, capture_output=True, text=True, cwd=working_dir,
         )
         return result.returncode == 0 and result.stdout.strip() == "OK"
 
@@ -152,12 +167,16 @@ class APIRunner(LLMRunner):
         max_retries: int = 3,
         max_tool_rounds: int = 50,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.default_model = model
         self.max_retries = max_retries
         self.max_tool_rounds = max_tool_rounds
         self.max_tokens = max_tokens
+        # When set, included as `temperature` in every messages.create call.
+        # None means "do not pass temperature" (use Anthropic API default).
+        self.temperature = temperature
         self._client = None
 
     def _get_client(self):
@@ -177,11 +196,14 @@ class APIRunner(LLMRunner):
     def check_auth(self, working_dir: str) -> bool:
         try:
             client = self._get_client()
-            response = client.messages.create(
-                model=self.default_model,
-                max_tokens=10,
-                messages=[{"role": "user", "content": "Reply with OK"}],
-            )
+            kwargs: dict = {
+                "model": self.default_model,
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "Reply with OK"}],
+            }
+            if self.temperature is not None:
+                kwargs["temperature"] = self.temperature
+            response = client.messages.create(**kwargs)
             text = "".join(
                 b.text for b in response.content if hasattr(b, "text")
             )
@@ -237,6 +259,8 @@ class APIRunner(LLMRunner):
                     kwargs["system"] = system
                 if tools:
                     kwargs["tools"] = tools
+                if self.temperature is not None:
+                    kwargs["temperature"] = self.temperature
 
                 response = client.messages.create(**kwargs)
             except Exception as e:
@@ -333,9 +357,19 @@ def create_runner(config: dict) -> LLMRunner:
     """Create an LLM runner from config.
 
     Reads config['llm']['backend']: 'cli' (default) or 'api'.
+    Reads config['llm']['temperature']: float in [0, 1], default 0.
+
+    Documentation maintenance is a stability-first workload — same code
+    should produce the same suggestions. Defaulting temperature to 0
+    drastically reduces run-to-run variance. Callers can override per
+    deployment if a stage genuinely benefits from sampling diversity.
     """
-    backend = (config.get("llm", {}).get("backend", "cli")).lower()
+    llm = config.get("llm", {}) or {}
+    backend = (llm.get("backend") or "cli").lower()
+    temperature = llm.get("temperature")
+    if temperature is None:
+        temperature = 0
     if backend == "api":
-        model = config.get("llm", {}).get("model", "claude-sonnet-4-20250514")
-        return APIRunner(model=model)
-    return CLIRunner()
+        model = llm.get("model") or "claude-sonnet-4-20250514"
+        return APIRunner(model=model, temperature=temperature)
+    return CLIRunner(temperature=temperature)

@@ -99,8 +99,19 @@ def validate_config(config: dict) -> list[str]:
     if llm is not None:
         if not isinstance(llm, dict):
             errors.append("llm must be a mapping")
-        elif llm.get("backend") and llm["backend"] not in ("cli", "api"):
-            errors.append("llm.backend must be 'cli' or 'api'")
+        else:
+            if llm.get("backend") and llm["backend"] not in ("cli", "api"):
+                errors.append("llm.backend must be 'cli' or 'api'")
+            temp = llm.get("temperature")
+            # `null` (or absent) is allowed — the runtime treats both as
+            # "use the default". Only validate when a real value is supplied.
+            if temp is not None:
+                # bool is a subclass of int in Python; reject it explicitly
+                # so `temperature: true` does not silently validate as 1.
+                if isinstance(temp, bool) or not isinstance(temp, (int, float)):
+                    errors.append("llm.temperature must be a number between 0 and 1")
+                elif temp < 0 or temp > 1:
+                    errors.append("llm.temperature must be between 0 and 1")
 
     return errors
 

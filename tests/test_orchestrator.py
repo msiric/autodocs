@@ -484,6 +484,55 @@ class TestSchemaValidation:
         }
         assert self.validate(config) == []
 
+    # --- llm.temperature validation ---
+    # The temperature knob is the linchpin of run-to-run determinism for
+    # SUGGEST. Garbage values must be rejected at config-load time, not at
+    # the API call site where they cause cryptic 400s mid-pipeline.
+
+    def _base_cfg(self) -> dict:
+        return {"platform": "github", "github": {"owner": "x", "repo": "y"}}
+
+    def test_llm_temperature_valid_int(self):
+        cfg = self._base_cfg() | {"llm": {"temperature": 0}}
+        assert self.validate(cfg) == []
+
+    def test_llm_temperature_valid_float(self):
+        cfg = self._base_cfg() | {"llm": {"temperature": 0.5}}
+        assert self.validate(cfg) == []
+
+    def test_llm_temperature_one_is_valid(self):
+        cfg = self._base_cfg() | {"llm": {"temperature": 1}}
+        assert self.validate(cfg) == []
+
+    def test_llm_temperature_negative_rejected(self):
+        cfg = self._base_cfg() | {"llm": {"temperature": -0.1}}
+        errors = self.validate(cfg)
+        assert any("temperature" in e for e in errors)
+
+    def test_llm_temperature_above_one_rejected(self):
+        cfg = self._base_cfg() | {"llm": {"temperature": 1.5}}
+        errors = self.validate(cfg)
+        assert any("temperature" in e for e in errors)
+
+    def test_llm_temperature_string_rejected(self):
+        cfg = self._base_cfg() | {"llm": {"temperature": "0"}}
+        errors = self.validate(cfg)
+        assert any("temperature" in e for e in errors)
+
+    def test_llm_temperature_bool_rejected(self):
+        # Python's `bool` is a subclass of `int`. Without an explicit guard,
+        # `temperature: true` would silently validate as 1. Reject it so the
+        # config error surfaces the actual mistake.
+        cfg = self._base_cfg() | {"llm": {"temperature": True}}
+        errors = self.validate(cfg)
+        assert any("temperature" in e for e in errors)
+
+    def test_llm_temperature_null_is_valid(self):
+        # YAML `temperature: null` → Python None. The runtime treats it as
+        # "use the default" — must not be a validation error.
+        cfg = self._base_cfg() | {"llm": {"temperature": None}}
+        assert self.validate(cfg) == []
+
 
 # ---------------------------------------------------------------------------
 # fetch_pr_details — guards against ADO CLI argument regressions
