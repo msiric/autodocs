@@ -540,14 +540,33 @@ def git_branch_commit_push(
     # Delete stale local branch if it exists (leftover from previous run)
     _git("branch", "-D", branch)
 
+    # apply_edits writes changes in-place to the working tree before we
+    # get here. Switching to a clean branch (origin/<target>) would refuse
+    # because of those uncommitted changes. Stash them, switch, pop.
+    stash_label = f"autodocs-apply-{branch}"
+    _git("stash", "push", "--include-untracked", "-m", stash_label)
+    # Detect whether stash actually saved anything (vs "No local changes to save")
+    list_result = subprocess.run(
+        ["git", "stash", "list"], capture_output=True, text=True, cwd=str(repo_dir),
+    )
+    has_stash = stash_label in list_result.stdout
+
     # Branch from origin/<target_branch>, not from current HEAD.
-    # This ensures the autodocs branch is clean even when the user has a
-    # feature branch checked out with in-progress work.
     base_ref = f"origin/{target_branch}"
     ok, err = _git("checkout", "-b", branch, base_ref)
     if not ok:
         print(f"git checkout failed: {err}", file=sys.stderr)
+        if has_stash:
+            _git("stash", "pop")  # restore on original branch
         return False
+
+    # Re-apply the stashed changes on the new branch
+    if has_stash:
+        ok, err = _git("stash", "pop")
+        if not ok:
+            print(f"git stash pop on new branch failed: {err}", file=sys.stderr)
+            _git("checkout", "-")
+            return False
 
     for f in files:
         _git("add", str(f))
