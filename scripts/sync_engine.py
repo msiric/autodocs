@@ -965,8 +965,10 @@ def write_daily_report(
             if desc:
                 lines.append(f"  Description: {desc}")
 
-            if cls == CLASS_YES and prefix:
-                lines.append(f"  {label}: YES ({prefix})")
+            if cls == CLASS_YES:
+                # Show prefix if known (from classify_prs); otherwise note git-first discovery
+                suffix = f" ({prefix})" if prefix else " (path-filtered)"
+                lines.append(f"  {label}: YES{suffix}")
             elif cls == CLASS_MAYBE:
                 lines.append(f"  {label}: MAYBE — review")
             elif cls == "REFACTOR":
