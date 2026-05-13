@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
@@ -512,38 +513,56 @@ def git_branch_commit_push(
     branch: str,
     files: list[Path],
     message: str,
+    target_branch: str = "main",
 ) -> bool:
-    """Create branch, add files, commit, push. Returns True on success."""
-    def _git(*args: str) -> bool:
+    """Create branch from origin/<target_branch>, add files, commit, push.
+
+    Branches from the canonical mainline (origin/<target_branch>) so the PR
+    is clean even when the user has a feature branch checked out. Logs any
+    git failure to stderr so the orchestrator can include it in error reports.
+    """
+    def _git(*args: str, capture_stderr: bool = True) -> tuple[bool, str]:
         result = subprocess.run(
             ["git"] + list(args), capture_output=True, text=True, cwd=str(repo_dir),
         )
-        return result.returncode == 0
+        stderr = result.stderr.strip() if capture_stderr else ""
+        return result.returncode == 0, stderr
 
-    # Check if branch already exists (remote or local)
+    # Check if branch already exists on remote
     result = subprocess.run(
         ["git", "branch", "-r", "--list", f"origin/{branch}"],
         capture_output=True, text=True, cwd=str(repo_dir),
     )
     if result.stdout.strip():
-        return False  # Branch already exists on remote
+        print(f"git error: branch origin/{branch} already exists on remote", file=sys.stderr)
+        return False
 
     # Delete stale local branch if it exists (leftover from previous run)
     _git("branch", "-D", branch)
 
-    if not _git("checkout", "-b", branch):
+    # Branch from origin/<target_branch>, not from current HEAD.
+    # This ensures the autodocs branch is clean even when the user has a
+    # feature branch checked out with in-progress work.
+    base_ref = f"origin/{target_branch}"
+    ok, err = _git("checkout", "-b", branch, base_ref)
+    if not ok:
+        print(f"git checkout failed: {err}", file=sys.stderr)
         return False
 
     for f in files:
         _git("add", str(f))
 
-    if not _git("commit", "-m", message):
+    ok, err = _git("commit", "-m", message)
+    if not ok:
+        print(f"git commit failed: {err}", file=sys.stderr)
         _git("checkout", "-")
         return False
 
-    success = _git("push", "origin", branch)
+    ok, err = _git("push", "origin", branch)
+    if not ok:
+        print(f"git push failed: {err}", file=sys.stderr)
     _git("checkout", "-")  # Always return to previous branch
-    return success
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -874,9 +893,9 @@ def deterministic_apply(config: dict, output_dir: Path, repo_dir: Path) -> Apply
         for a in applied:
             commit_msg += f"- {a['doc']}: {a['section']} ({a.get('triggered_by', '')})\n"
 
-        if not git_branch_commit_push(repo_dir, branch, modified_files, commit_msg):
+        if not git_branch_commit_push(repo_dir, branch, modified_files, commit_msg, target):
             return ApplyResult(success=False, applied=applied, skipped=[s for s in skipped],
-                               error="git branch/commit/push failed")
+                               error="git branch/commit/push failed (see sync.err.log for details)")
 
         pr_number = create_pr(config, branch, title, body)
         if pr_number:
