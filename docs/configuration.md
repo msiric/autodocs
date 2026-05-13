@@ -232,6 +232,16 @@ auto_pr:
 
 Requires `repo_path` on each doc entry (see docs section above) so the apply prompt knows where to find the files in the repo. Reviewers are added via `gh pr edit` (GitHub), `az repos pr reviewer add` (ADO), or `glab mr update` (GitLab).
 
+### `worktree_dir` (optional)
+
+Path to a directory autodocs uses as an isolated git worktree for the repository. The worktree is checked out at `origin/<target_branch>` on every run, kept clean with `git clean -fd`, and used for all sync/drift/suggest/apply operations. This makes autodocs immune to whatever state the user's main checkout is in (uncommitted edits, unresolved merges, branches checked out for unrelated work).
+
+```yaml
+worktree_dir: "~/.autodocs-worktrees/my-repo"   # optional; defaults to ~/.autodocs-worktrees/<repo-basename>
+```
+
+If unset, the default is `~/.autodocs-worktrees/<repo-basename>`. If the repo has no `origin/<target_branch>` ref, or `worktree_dir` resolves to the repo directory itself, autodocs logs a warning and falls back to running directly against the main checkout.
+
 ### `multi_model` (optional)
 
 Enables multi-model verification for suggestions. When enabled, the suggest prompt runs a second time with a chain-of-thought reasoning variation (same model, different reasoning path). Only suggestions where both runs agree are applied via auto-PR. Disputed suggestions stay in drift-suggestions.md for manual review.

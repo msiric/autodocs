@@ -600,6 +600,110 @@ class Orchestrator:
 
 
 # ---------------------------------------------------------------------------
+# Worktree isolation
+# ---------------------------------------------------------------------------
+
+def _default_worktree_path(repo_dir: Path) -> Path:
+    """Default worktree location: ~/.autodocs-worktrees/<repo-name>."""
+    return Path.home() / ".autodocs-worktrees" / repo_dir.name
+
+
+def ensure_worktree(
+    repo_dir: Path,
+    config: dict,
+    logger: Logger,
+) -> Path:
+    """Ensure a clean, isolated worktree synced to origin/<target_branch>.
+
+    autodocs needs to run git operations (log, fetch, checkout, commit, push)
+    without touching the user's main checkout — which may have in-progress
+    work, unresolved merges, or untracked files. We use git worktree to
+    create a separate working tree that shares the same .git database but
+    has its own independent index and working directory.
+
+    Lifecycle:
+    1. First run: `git worktree add <wt_path> origin/<target_branch>` from
+       the user's main repo. Creates a clean checkout in an isolated dir.
+    2. Subsequent runs: `git fetch origin` + `git reset --hard origin/<target>`
+       + `git clean -fd` in the worktree. Always ends in a known-clean state
+       matching the canonical mainline.
+
+    Returns the worktree path. Falls back to repo_dir if worktree setup fails
+    (no origin remote, etc.) — pipeline still runs, but loses isolation
+    guarantee. Caller can detect fallback by comparing returned path to repo_dir.
+    """
+    target_branch = (config.get("auto_pr") or {}).get("target_branch") or "main"
+    wt_path = config.get("worktree_dir")
+    wt_path = Path(wt_path).expanduser() if wt_path else _default_worktree_path(repo_dir)
+
+    # Refuse identical paths — would defeat isolation
+    if wt_path.resolve() == repo_dir.resolve():
+        logger.log(f"WARN: worktree_dir equals repo_dir — running without isolation")
+        return repo_dir
+
+    # Confirm we have an origin to track. Without it, worktree mode is moot.
+    has_origin = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"origin/{target_branch}"],
+        cwd=str(repo_dir), capture_output=True,
+    ).returncode == 0
+    if not has_origin:
+        logger.log(
+            f"WARN: origin/{target_branch} not found — running against main repo "
+            "(worktree isolation disabled)"
+        )
+        return repo_dir
+
+    if wt_path.exists():
+        # Existing worktree: sync to latest origin/<target_branch>
+        if not _sync_worktree(wt_path, target_branch, logger):
+            return repo_dir  # sync failed → fall back to main repo
+    else:
+        # First run: create the worktree
+        wt_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "worktree", "add", str(wt_path), f"origin/{target_branch}"],
+            cwd=str(repo_dir), capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            logger.log(
+                f"WARN: failed to create worktree at {wt_path}: "
+                f"{result.stderr.strip()[:200]} — falling back to main repo"
+            )
+            return repo_dir
+        logger.log(f"WORKTREE CREATED: {wt_path}")
+
+    return wt_path
+
+
+def _sync_worktree(wt_path: Path, target_branch: str, logger: Logger) -> bool:
+    """Sync an existing worktree to origin/<target_branch>. Returns True on success.
+
+    Steps (all in the worktree, not the main repo):
+      git fetch origin          — pick up new commits
+      git reset --hard <ref>    — point to canonical mainline
+      git clean -fd             — drop any stray files
+    """
+    def _git(*args: str) -> tuple[bool, str]:
+        result = subprocess.run(
+            ["git", *args], cwd=str(wt_path), capture_output=True, text=True,
+        )
+        return result.returncode == 0, (result.stderr or "").strip()[:200]
+
+    ok, err = _git("fetch", "origin", "--quiet")
+    if not ok:
+        logger.log(f"WARN: worktree git fetch failed: {err}")
+        # Continue — local state may still be usable
+
+    ok, err = _git("reset", "--hard", f"origin/{target_branch}")
+    if not ok:
+        logger.log(f"WARN: worktree reset failed: {err} — falling back to main repo")
+        return False
+
+    _git("clean", "-fd")  # best-effort cleanup of untracked files
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Pre-sync (runs before the pipeline, handles feedback/stale/discovery)
 # ---------------------------------------------------------------------------
 
@@ -890,12 +994,13 @@ def _run_with_lock(
     scripts_dir: Path,
 ) -> None:
     """Pipeline execution (called with lock held)."""
-    # Structural scan mode
+    # Structural scan mode (also runs against the worktree for consistency)
     if args.structural_scan:
         if not runner.check_auth(str(repo_dir)):
             logger.log("SCAN AUTH FAILED — aborting")
             sys.exit(1)
-        run_structural_scan(output_dir, repo_dir, runner, logger)
+        scan_dir = ensure_worktree(repo_dir, config, logger)
+        run_structural_scan(output_dir, scan_dir, runner, logger)
         return
 
     # Auth check
@@ -910,11 +1015,16 @@ def _run_with_lock(
         logger.log("AUTH FAILED — aborting sync")
         sys.exit(1)
 
-    # Pre-flight: verify doc paths
+    # Ensure isolated worktree synced to origin/<target_branch>.
+    # All downstream git operations use the worktree path, so the user's
+    # main checkout is untouched (no conflict with in-progress work).
+    work_dir = ensure_worktree(repo_dir, config, logger)
+
+    # Pre-flight: verify doc paths exist on the canonical ref (in the worktree)
     config_helper = scripts_dir / "config-helper.py"
     if config_helper.exists():
         result = subprocess.run(
-            ["python3", str(config_helper), str(output_dir / "config.yaml"), "verify-docs", str(repo_dir)],
+            ["python3", str(config_helper), str(output_dir / "config.yaml"), "verify-docs", str(work_dir)],
             capture_output=True, text=True,
         )
         if result.stdout.strip():
@@ -922,33 +1032,25 @@ def _run_with_lock(
             for line in result.stdout.strip().splitlines():
                 logger.log(f"  {line}")
 
-    # Git fetch
-    result = subprocess.run(
-        ["git", "fetch", "origin", "--quiet"],
-        cwd=str(repo_dir), capture_output=True,
-    )
-    if result.returncode != 0:
-        logger.log("git fetch failed (non-fatal)")
-
     platform = read_config_key(config, "platform")
 
-    # Pre-sync
-    proceed = run_pre_sync(scripts_dir, output_dir, repo_dir, platform, logger)
+    # Pre-sync (operates on the worktree)
+    proceed = run_pre_sync(scripts_dir, output_dir, work_dir, platform, logger)
     if not proceed:
         (output_dir / "sync-status.md").write_text(
             f"status: skipped\nreason: open PR limit\ntimestamp: {logger.timestamp}\n"
         )
         return
 
-    # Catchup or normal mode
+    # Catchup or normal mode (operates on the worktree)
     if args.since_date:
         run_catchup(
-            output_dir, repo_dir, config, runner, logger, scripts_dir,
+            output_dir, work_dir, config, runner, logger, scripts_dir,
             args.since_date, args.chunk_days, args.dry_run,
         )
     else:
         orch = Orchestrator(
-            output_dir, repo_dir, config, runner, logger, scripts_dir, args.dry_run,
+            output_dir, work_dir, config, runner, logger, scripts_dir, args.dry_run,
         )
         orch.run_pipeline()
         orch.write_status()

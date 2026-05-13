@@ -89,6 +89,11 @@ def validate_config(config: dict) -> list[str]:
         elif auto_pr.get("enabled") and not auto_pr.get("target_branch"):
             errors.append("auto_pr.enabled requires auto_pr.target_branch")
 
+    # Worktree dir (optional, string path)
+    wt = config.get("worktree_dir")
+    if wt is not None and not isinstance(wt, str):
+        errors.append("worktree_dir must be a string path")
+
     # LLM backend (optional)
     llm = config.get("llm")
     if llm is not None:
