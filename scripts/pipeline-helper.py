@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -160,8 +161,43 @@ MAX_SOURCE_FILES = 200
 MAX_SOURCE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
+def _origin_ref_exists(repo_dir: Path, ref: str) -> bool:
+    """Check whether a git ref (e.g., 'origin/master') exists locally."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref],
+        cwd=str(repo_dir), capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _fetch_file_from_ref(repo_dir: Path, ref: str, path: str) -> bytes | None:
+    """Fetch a file's content at a specific git ref. Returns bytes or None.
+
+    Uses `git show <ref>:<path>`. Returns None if the file doesn't exist at
+    that ref (e.g., it was deleted on origin or never existed there). Binary-
+    safe — caller writes raw bytes to preserve fidelity for any file type.
+    """
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=str(repo_dir), capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 def copy_sources(output_dir: str | Path, repo_dir: str | Path) -> int:
-    """Copy mapped source files to source-context/ for suggest prompt.
+    """Copy mapped source files to source-context/ for the suggest prompt.
+
+    Fetches each file's content from origin/<target_branch> via `git show`,
+    NOT from the working tree. This ensures the LLM always sees the canonical
+    mainline state regardless of which branch the user has checked out.
+
+    Falls back to the working tree if origin/<target_branch> doesn't exist
+    (e.g., shallow clones, non-standard remote setups).
+
+    Skips files with change_type 'D' (deleted) — the file no longer exists
+    on the target branch, so including stale content would mislead the LLM.
 
     Guards against monorepo blowup: stops at MAX_SOURCE_FILES or MAX_SOURCE_BYTES.
     """
@@ -178,32 +214,63 @@ def copy_sources(output_dir: str | Path, repo_dir: str | Path) -> int:
     if not mappings_path.exists():
         return 0
 
+    # Determine the canonical ref to read from
+    config = load_config(output_dir)
+    target_branch = (config.get("auto_pr") or {}).get("target_branch") or "main"
+    ref = f"origin/{target_branch}"
+    use_ref = _origin_ref_exists(repo_dir, ref)
+    if not use_ref:
+        print(
+            f"source-context: {ref} not found locally; falling back to working tree",
+            file=sys.stderr,
+        )
+
     copied = 0
     total_bytes = 0
     seen: set[str] = set()
     for line in mappings_path.read_text().splitlines():
-        m = re.match(r"[MADR]\d*\s+(\S+)\s+→\s+(.+)", line)
-        if m and m.group(2).strip() != UNMAPPED:
-            src_path = m.group(1).strip()
-            if src_path in seen:
-                continue
-            seen.add(src_path)
+        m = re.match(r"([MADR])\d*\s+(\S+)\s+→\s+(.+)", line)
+        if not m or m.group(3).strip() == UNMAPPED:
+            continue
+
+        change_type = m.group(1)
+        src_path = m.group(2).strip()
+        if src_path in seen:
+            continue
+        seen.add(src_path)
+
+        # Skip deleted files — they no longer exist on the target branch.
+        # Including stale content would make the LLM think old code is current.
+        if change_type == "D":
+            continue
+
+        # Fetch content from origin/<target_branch> (primary) or working tree (fallback)
+        content: bytes | None = None
+        if use_ref:
+            content = _fetch_file_from_ref(repo_dir, ref, src_path)
+        if content is None:
+            # Fallback: read from working tree
             full_path = repo_dir / src_path
             if full_path.exists() and full_path.is_file():
-                file_size = full_path.stat().st_size
-                if copied >= MAX_SOURCE_FILES or total_bytes + file_size > MAX_SOURCE_BYTES:
-                    print(
-                        f"source-context: stopped at {copied} files / "
-                        f"{total_bytes // 1024}KB (limits: {MAX_SOURCE_FILES} files / "
-                        f"{MAX_SOURCE_BYTES // 1024 // 1024}MB)",
-                        file=sys.stderr,
-                    )
-                    break
-                dest = source_dir / src_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(full_path, dest)
-                copied += 1
-                total_bytes += file_size
+                content = full_path.read_bytes()
+        if content is None:
+            continue  # file unavailable in both ref and working tree
+
+        file_size = len(content)
+        if copied >= MAX_SOURCE_FILES or total_bytes + file_size > MAX_SOURCE_BYTES:
+            print(
+                f"source-context: stopped at {copied} files / "
+                f"{total_bytes // 1024}KB (limits: {MAX_SOURCE_FILES} files / "
+                f"{MAX_SOURCE_BYTES // 1024 // 1024}MB)",
+                file=sys.stderr,
+            )
+            break
+
+        dest = source_dir / src_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        copied += 1
+        total_bytes += file_size
 
     return copied
 
