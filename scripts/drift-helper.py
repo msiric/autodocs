@@ -582,6 +582,92 @@ def merge_changelogs(output_dir: str | Path) -> None:
 # Suggest dedup
 # ---------------------------------------------------------------------------
 
+# Matches entry headers in any of these forms (all are normalized identically):
+#   ### YYYY-MM-DD — PR #N by AUTHOR
+#   ### YYYY-MM-DD — [PR #N](url) by AUTHOR
+#   ### YYYY-MM-DD — PR #N                (no "by ...": still normalized if pr_meta has the PR)
+# PR number is captured in group 2 (linked form) or group 3 (plain form);
+# exactly one will match. " by ..." suffix is optional.
+_ENTRY_HEADER_RE = re.compile(
+    r"^(### \d{4}-\d{2}-\d{2} — )"
+    r"(?:\[PR #(\d+)\]\([^)]+\)|PR #(\d+))"
+    r"(?: by .+)?$"
+)
+
+
+def normalize_changelog_attribution(output_dir: str | Path) -> None:
+    """Rewrite every changelog-*.md so each entry header carries the
+    pr_meta-sourced author, title, and URL for its PR.
+
+    The suggest LLM is asked to look up pr_meta when writing changelog
+    entries. Empirically it does so for some entries and skips the lookup
+    for others in the same run, leaving "(unknown)" / missing Title lines
+    even when pr_meta has complete data. Explicit "mandatory mechanical
+    lookup" prompt language did not make the behavior reliable.
+
+    Solution: own attribution at the data layer instead of trusting the
+    LLM. After the LLM writes changelogs (and merge_changelogs merges
+    history), walk every entry header whose PR number is in pr_meta and
+    rewrite it deterministically. Entries whose PR is not in pr_meta
+    (older history, manual entries) are left untouched.
+
+    Idempotent — running twice produces the same output.
+    """
+    output_dir = Path(output_dir)
+    ctx_path = output_dir / "suggest-context.json"
+    if not ctx_path.exists():
+        return
+    try:
+        ctx = json.loads(ctx_path.read_text())
+    except (json.JSONDecodeError, ValueError):
+        return
+    pr_meta = ctx.get("pr_meta") or {}
+    if not pr_meta:
+        return
+
+    for changelog in output_dir.glob("changelog-*.md"):
+        if changelog.name.endswith(".bak"):
+            continue
+        original = changelog.read_text(encoding="utf-8")
+        rewritten = _normalize_changelog_text(original, pr_meta)
+        if rewritten != original:
+            changelog.write_text(rewritten)
+
+
+def _normalize_changelog_text(text: str, pr_meta: dict[str, dict[str, str]]) -> str:
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _ENTRY_HEADER_RE.match(line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+        pr_number = m.group(2) or m.group(3)
+        meta = pr_meta.get(pr_number)
+        if not meta:
+            out.append(line)
+            i += 1
+            continue
+        author = meta.get("author") or "(no author recorded)"
+        url = meta.get("url") or ""
+        title = meta.get("title") or ""
+        pr_part = f"[PR #{pr_number}]({url})" if url else f"PR #{pr_number}"
+        out.append(f"{m.group(1)}{pr_part} by {author}")
+        i += 1
+        # Replace an existing Title line; insert one if missing and pr_meta has a title
+        if i < len(lines) and lines[i].startswith("**Title:**"):
+            if title:
+                out.append(f"**Title:** {title}")
+            i += 1  # drop the stale line either way
+        elif title:
+            out.append(f"**Title:** {title}")
+    trailing = "\n" if text.endswith("\n") else ""
+    return "\n".join(out) + trailing
+
+
 def parse_changelog_entries(output_dir: Path) -> set[tuple[str, str, int]]:
     """Extract (doc, section, PR) tuples from existing changelog files."""
     entries = set()
@@ -858,6 +944,8 @@ def main() -> None:
         apply_lifecycle(output_dir)
     elif operation == "merge-changelogs":
         merge_changelogs(output_dir)
+    elif operation == "normalize-changelog-attribution":
+        normalize_changelog_attribution(output_dir)
     elif operation == "suggest-dedup":
         suggest_dedup(output_dir)
     elif operation == "verify-finds":

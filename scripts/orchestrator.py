@@ -475,10 +475,20 @@ class Orchestrator:
         self.logger.log("SUGGEST SUCCESS")
         self.logger.metric("suggest", "success", rc)
 
-        # Post-suggest: merge changelogs
+        # Post-suggest: merge changelogs, then normalize PR attribution.
+        # Normalization is the canonical attribution pass — the LLM is
+        # asked to look up pr_meta but does so inconsistently; this pass
+        # rewrites every header whose PR is in pr_meta so author/title/URL
+        # cannot regress to "(unknown)". Runs after merge so both new and
+        # historical entries get the same treatment.
         _run_helper(
             self.scripts_dir, "drift-helper.py",
             ["merge-changelogs", str(self.output_dir)],
+            self.logger,
+        )
+        _run_helper(
+            self.scripts_dir, "drift-helper.py",
+            ["normalize-changelog-attribution", str(self.output_dir)],
             self.logger,
         )
 

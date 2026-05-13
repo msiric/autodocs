@@ -114,9 +114,7 @@ For each suggestion from Step 3, write one changelog entry per triggering PR. Th
 - **Changed**: What changed, stated factually (e.g., "renamed handleError to classifyError", "added retry logic for file creation timeout")
 - **Why**: From the PR description, summarize WHY the change was made in 1-2 sentences. If no description is available, write "No PR description provided."
 
-**PR metadata lookup (mandatory, mechanical):** For every PR number in `alert.pr_numbers`, look it up in `pr_meta[pr_number_as_string]` and use the `author`, `title`, and `url` directly in the entry header. The lookup is deterministic — if `pr_numbers` contains the ID, `pr_meta` will have its metadata (`pr_meta` covers every PR in today's `daily-report.md`).
-
-Only if a PR is *not* in `pr_meta` (e.g., you chose to attribute a suggestion to a PR outside the alert's `pr_numbers`), fall back to `daily-report.md` for `- PR #<id>: "<title>" by <author> — merged`. NEVER write `(unknown)` — if a field is genuinely unavailable after both lookups, write `(no <field> recorded)` instead so a human can spot the gap.
+**PR metadata:** Each entry header MUST include the PR number in one of these forms — `### YYYY-MM-DD — PR #<id> by <author>` or `### YYYY-MM-DD — [PR #<id>](<url>) by <author>`. The author, title, and URL fields are normalized deterministically from `pr_meta` after you finish writing, so you do not need to look them up exhaustively — emit your best guess for `<author>` (or simply `(unknown)`) and a `**Title:** <title>` line if you have one. The only field that must be right is the PR number itself.
 
 ## Step 5: Write Output
 

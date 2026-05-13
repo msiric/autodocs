@@ -862,6 +862,240 @@ EOF
   [ ! -f "$TEST_DIR/changelog-guide.md.bak" ]
 }
 
+@test "normalize-changelog-attribution rewrites (unknown) with pr_meta author and adds Title and URL" {
+  # The whole point of this pass: the LLM left "(unknown)" attribution
+  # in entry headers despite pr_meta having the data. After this pass,
+  # every header whose PR is in pr_meta must be fully attributed.
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "actionable_alerts": [],
+  "skipped": [],
+  "changelog_warnings": [],
+  "pr_meta": {
+    "1561672": {
+      "author": "figavre@microsoft.com",
+      "title": "[Chat Pages] Migrate tab data model to ConversationContext",
+      "url": "https://example.com/pullrequest/1561672"
+    }
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-architecture.md" <<EOF
+# architecture.md — Changelog
+
+## Tab CRUD Operations
+
+### 2026-05-13 — PR #1561672 by (unknown)
+**Changed:** Migrated tab data model to ConversationContext.
+**Why:** Aligns the channel-pages tab data layer with the unified Pages entity.
+
+---
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  result=$(cat "$TEST_DIR/changelog-architecture.md")
+  # Header now linked + properly attributed
+  echo "$result" | grep -qF "[PR #1561672](https://example.com/pullrequest/1561672) by figavre@microsoft.com"
+  # Title line inserted right after header
+  echo "$result" | grep -qF "**Title:** [Chat Pages] Migrate tab data model to ConversationContext"
+  # No "(unknown)" remains anywhere
+  ! echo "$result" | grep -q "(unknown)"
+  # Body preserved
+  echo "$result" | grep -qF "Migrated tab data model to ConversationContext"
+}
+
+@test "normalize-changelog-attribution leaves entries untouched when PR not in pr_meta" {
+  # Historical entries from prior runs have PRs that aren't in today's
+  # pr_meta. They must not be rewritten — pr_meta is not authoritative
+  # for them.
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "999999": {"author": "newbie@example.com", "title": "Today's PR", "url": "https://ex/999999"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-architecture.md" <<EOF
+# architecture.md — Changelog
+
+## Auth
+
+### 2026-03-04 — PR #42 by alice
+**Changed:** Old change.
+**Why:** Old reason.
+
+---
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  # Existing entry preserved verbatim
+  grep -qF "### 2026-03-04 — PR #42 by alice" "$TEST_DIR/changelog-architecture.md"
+}
+
+@test "normalize-changelog-attribution is idempotent" {
+  # Running twice must produce the same output. Critical because the pass
+  # runs unconditionally on every pipeline invocation.
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "100": {"author": "x@y.com", "title": "Some title", "url": "https://ex/100"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-doc.md" <<EOF
+# doc.md — Changelog
+
+## Section
+
+### 2026-05-13 — PR #100 by (unknown)
+**Changed:** Did a thing.
+**Why:** Because.
+
+---
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+  first=$(cat "$TEST_DIR/changelog-doc.md")
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+  second=$(cat "$TEST_DIR/changelog-doc.md")
+  [ "$first" = "$second" ]
+}
+
+@test "normalize-changelog-attribution refreshes already-attributed entries from pr_meta" {
+  # pr_meta is the source of truth. If a header has stale or different
+  # attribution (e.g., author email changed, title was edited), pr_meta wins.
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "200": {"author": "current@example.com", "title": "Current Title", "url": "https://ex/200"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-doc.md" <<EOF
+# doc.md — Changelog
+
+## Section
+
+### 2026-05-13 — [PR #200](https://stale-url.example) by stale@example.com
+**Title:** Stale Title
+**Changed:** A thing.
+**Why:** Reason.
+
+---
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  result=$(cat "$TEST_DIR/changelog-doc.md")
+  echo "$result" | grep -qF "[PR #200](https://ex/200) by current@example.com"
+  echo "$result" | grep -qF "**Title:** Current Title"
+  ! echo "$result" | grep -q "stale-url\|stale@example\|Stale Title"
+}
+
+@test "normalize-changelog-attribution drops Title line when pr_meta has no title" {
+  # If a stale Title line exists and pr_meta has no title for that PR,
+  # remove the line rather than leaving a stale value.
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "300": {"author": "x@y.com", "title": "", "url": "https://ex/300"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-doc.md" <<EOF
+# doc.md — Changelog
+
+## Section
+
+### 2026-05-13 — PR #300 by (unknown)
+**Title:** Old stale title
+**Changed:** A thing.
+**Why:** Reason.
+
+---
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  result=$(cat "$TEST_DIR/changelog-doc.md")
+  ! echo "$result" | grep -q "Old stale title"
+  ! echo "$result" | grep -q '\*\*Title:\*\*'
+  echo "$result" | grep -qF "by x@y.com"
+}
+
+@test "normalize-changelog-attribution no-op when suggest-context.json missing" {
+  cat > "$TEST_DIR/changelog-doc.md" <<EOF
+# doc.md — Changelog
+
+## Section
+
+### 2026-05-13 — PR #1 by (unknown)
+**Changed:** A thing.
+EOF
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+  grep -qF "by (unknown)" "$TEST_DIR/changelog-doc.md"
+}
+
+@test "normalize-changelog-attribution fills attribution when LLM omitted by-AUTHOR entirely" {
+  # If the LLM writes a header without "by AUTHOR" at all, the post-pass
+  # must still attribute from pr_meta (rather than leaving a bare PR number).
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "400": {"author": "z@z.com", "title": "T-Z", "url": "https://ex/400"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-doc.md" <<EOF
+# doc.md — Changelog
+
+## Section
+
+### 2026-05-13 — PR #400
+**Changed:** A thing.
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  result=$(cat "$TEST_DIR/changelog-doc.md")
+  echo "$result" | grep -qF "[PR #400](https://ex/400) by z@z.com"
+  echo "$result" | grep -qF "**Title:** T-Z"
+}
+
+@test "normalize-changelog-attribution operates on every changelog file" {
+  cat > "$TEST_DIR/suggest-context.json" <<EOF
+{
+  "pr_meta": {
+    "10": {"author": "a@a.com", "title": "T-A", "url": "https://ex/10"},
+    "20": {"author": "b@b.com", "title": "T-B", "url": "https://ex/20"}
+  }
+}
+EOF
+  cat > "$TEST_DIR/changelog-architecture.md" <<EOF
+# architecture.md — Changelog
+
+## S
+
+### 2026-05-13 — PR #10 by (unknown)
+**Changed:** x
+EOF
+  cat > "$TEST_DIR/changelog-pr-guide.md" <<EOF
+# pr-guide.md — Changelog
+
+## S
+
+### 2026-05-13 — PR #20 by (unknown)
+**Changed:** y
+EOF
+
+  python3 "$HELPER" normalize-changelog-attribution "$TEST_DIR"
+
+  grep -qF "by a@a.com" "$TEST_DIR/changelog-architecture.md"
+  grep -qF "by b@b.com" "$TEST_DIR/changelog-pr-guide.md"
+}
+
 @test "merge-changelogs skips when no backup exists" {
   cat > "$TEST_DIR/changelog-guide.md" <<EOF
 # guide.md — Changelog
