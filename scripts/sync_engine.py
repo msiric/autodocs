@@ -198,15 +198,28 @@ def discover_prs_from_git(
     repo_dir: Path,
     relevant_paths: list[str],
     lookback: str,
+    target_ref: str = "",
 ) -> list[dict]:
     """Discover merged PRs that touched relevant paths via git log.
 
-    Uses the local git history — works identically across all platforms.
+    Queries the canonical mainline (origin/<target_branch>) rather than HEAD,
+    so it works even when the user has a feature branch checked out.
+    Falls back to HEAD if the remote ref doesn't exist locally.
     Returns [{number, merge_commit, merged_at}] with minimal data.
     Supports glob patterns in relevant_paths (expanded before use).
     """
     if not relevant_paths:
         return []
+
+    # Resolve the ref to query: prefer origin/<target_branch>, fall back to HEAD
+    ref = "HEAD"
+    if target_ref:
+        check = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", target_ref],
+            capture_output=True, text=True, cwd=str(repo_dir),
+        )
+        if check.returncode == 0:
+            ref = target_ref
 
     # git log --first-parent: follow only the main branch lineage
     # -- paths: only commits that touched these paths
@@ -215,7 +228,7 @@ def discover_prs_from_git(
     # not the subject: "See merge request group/project!99"
     DELIM = "---AUTODOCS-COMMIT---"
     cmd = [
-        "git", "log", "--first-parent",
+        "git", "log", ref, "--first-parent",
         f"--since={lookback}",
         f"--format={DELIM}%n%H %aI%n%B",  # delimiter, hash+date, full message
         "--",
@@ -1077,9 +1090,14 @@ def deterministic_sync(
     # 2. Without relevant_paths: platform API fetch (all PRs, small repos)
     prs: list[dict] = []
 
+    # Query the canonical mainline (origin/<target_branch>) so PRs are
+    # discovered even when the user has a feature branch checked out.
+    target_branch = (config.get("auto_pr") or {}).get("target_branch") or "main"
+    target_ref = f"origin/{target_branch}"
+
     git_discovered = False
     if relevant_paths:
-        prs = discover_prs_from_git(repo_dir, relevant_paths, lookback)
+        prs = discover_prs_from_git(repo_dir, relevant_paths, lookback, target_ref)
         if prs:
             git_discovered = True
             # Git-first PRs are already path-filtered — mark as YES.
