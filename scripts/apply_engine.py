@@ -702,16 +702,19 @@ def add_reviewers(config: dict, pr_number: int) -> None:
                 )
 
     elif platform == "ado":
+        # az repos pr reviewer add identifies the PR by --id alone; it does
+        # NOT accept -p/--project (unlike az repos pr create). Passing it
+        # causes "ERROR: unrecognized arguments: -p Teamspace" and the
+        # reviewers are silently dropped.
         ado = config.get("ado", {})
-        org, project = ado.get("org", ""), ado.get("project", "")
-        if org and project:
+        org = ado.get("org", "")
+        if org:
             for reviewer in reviewers:
                 _run_reviewer_cmd(
                     ["az", "repos", "pr", "reviewer", "add",
                      "--id", str(pr_number),
                      "--reviewers", reviewer,
-                     "--org", f"https://dev.azure.com/{org}",
-                     "-p", project],
+                     "--org", f"https://dev.azure.com/{org}"],
                     reviewer,
                 )
 

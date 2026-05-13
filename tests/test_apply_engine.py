@@ -15,6 +15,7 @@ from apply_engine import (
     Suggestion,
     _clean_llm_artifacts,
     _merge_changelog_into,
+    add_reviewers,
     apply_edits,
     build_pr_body,
     filter_suggestions,
@@ -591,3 +592,90 @@ class TestRecordTracking:
         record_tracking(tmp_path, 99, "github", "2026-03-20", [])
         data = json.loads((tmp_path / "feedback" / "open-prs.json").read_text())
         assert len(data) == 1
+
+
+# ---------------------------------------------------------------------------
+# add_reviewers — guards against CLI argument regressions
+# ---------------------------------------------------------------------------
+
+class TestAddReviewers:
+    """Verify each platform's CLI invocation matches the actual CLI surface.
+
+    These tests don't actually run the CLI — they capture the command lists
+    sent to subprocess.run and assert the argument shape. This catches the
+    class of bug where a CLI changes its accepted arguments and we silently
+    drop reviewers (e.g., 'az repos pr reviewer add' does NOT accept -p).
+    """
+
+    def _captured_calls(self, monkeypatch, config: dict, pr_number: int = 1) -> list[list[str]]:
+        """Run add_reviewers with subprocess.run patched to capture cmd lists."""
+        import subprocess
+        calls: list[list[str]] = []
+
+        class _Result:
+            returncode = 0
+            stderr = ""
+
+        def _fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            return _Result()
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+        add_reviewers(config, pr_number)
+        return calls
+
+    def test_ado_command_has_no_project_flag(self, monkeypatch):
+        """az repos pr reviewer add must not include -p/--project.
+
+        This was a real production bug: the CLI rejected the command with
+        'unrecognized arguments: -p Teamspace' and reviewers were silently
+        dropped from every ADO PR.
+        """
+        calls = self._captured_calls(monkeypatch, {
+            "platform": "ado",
+            "ado": {"org": "myorg", "project": "MyProject"},
+            "auto_pr": {"reviewers": ["a@x.com", "b@x.com"]},
+        })
+        assert len(calls) == 2
+        for cmd in calls:
+            assert "-p" not in cmd, f"-p must not appear in: {cmd}"
+            assert "--project" not in cmd, f"--project must not appear in: {cmd}"
+            assert "az" in cmd[0]
+            assert "--id" in cmd
+            assert "--reviewers" in cmd
+            assert "--org" in cmd
+
+    def test_ado_skips_when_no_org(self, monkeypatch):
+        """Without ado.org configured, no reviewer commands should run."""
+        calls = self._captured_calls(monkeypatch, {
+            "platform": "ado",
+            "ado": {},  # missing org
+            "auto_pr": {"reviewers": ["a@x.com"]},
+        })
+        assert calls == []
+
+    def test_github_uses_gh_pr_edit(self, monkeypatch):
+        calls = self._captured_calls(monkeypatch, {
+            "platform": "github",
+            "github": {"owner": "me", "repo": "r"},
+            "auto_pr": {"reviewers": ["a@x.com"]},
+        })
+        assert len(calls) == 1
+        assert calls[0][:3] == ["gh", "pr", "edit"]
+        assert "--add-reviewer" in calls[0]
+
+    def test_no_op_when_no_reviewers(self, monkeypatch):
+        calls = self._captured_calls(monkeypatch, {
+            "platform": "ado",
+            "ado": {"org": "x"},
+            "auto_pr": {},  # no reviewers
+        })
+        assert calls == []
+
+    def test_no_op_when_no_pr_number(self, monkeypatch):
+        calls = self._captured_calls(monkeypatch, {
+            "platform": "ado",
+            "ado": {"org": "x"},
+            "auto_pr": {"reviewers": ["a@x.com"]},
+        }, pr_number=0)
+        assert calls == []
