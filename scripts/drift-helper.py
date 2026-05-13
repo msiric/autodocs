@@ -689,12 +689,26 @@ def pre_process(output_dir: str | Path) -> None:
 
 
 def suggest_dedup(output_dir: str | Path) -> None:
-    """Run suggest dedup. Write suggest-context.json."""
+    """Run suggest dedup. Write suggest-context.json.
+
+    Also exposes a pr_authors map (PR number → author) so the suggest LLM
+    can write accurate `by <author>` lines in changelog entries. Without
+    this, the LLM would fall back to '(unknown)' because drift-status.md
+    only contains trigger PR numbers — not author info.
+    """
     output_dir = Path(output_dir)
 
     unchecked, _ = parse_status(output_dir / "drift-status.md")
     changelog_entries = parse_changelog_entries(output_dir)
     pending = get_pending_sections(output_dir)
+
+    # Build PR-number → author map for changelog attribution
+    report = parse_report(output_dir / "daily-report.md")
+    pr_authors = {
+        pr["number"]: pr.get("author", "")
+        for pr in report.get("prs", [])
+        if pr.get("author")
+    }
 
     actionable = []
     skipped = []
@@ -742,6 +756,7 @@ def suggest_dedup(output_dir: str | Path) -> None:
         "actionable_alerts": actionable,
         "skipped": skipped,
         "changelog_warnings": changelog_warnings,
+        "pr_authors": pr_authors,
     }
 
     (output_dir / "suggest-context.json").write_text(

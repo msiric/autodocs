@@ -439,6 +439,62 @@ EOF
   [ "$actionable" = "1" ]
 }
 
+@test "suggest-dedup exposes pr_authors map for changelog attribution" {
+  # Build a daily-report.md with PRs that have authors, then verify the
+  # generated suggest-context.json carries the author info forward.
+  # Without this, the suggest LLM writes 'by (unknown)' in every changelog
+  # entry because drift-status.md only contains trigger PR numbers.
+  cat > "$TEST_DIR/daily-report.md" <<EOF
+---
+date: 2026-05-13
+feature_prs: 2
+---
+# Work Report — 2026-05-13
+
+## Team PRs
+- PR #1561672: "Migrate tab data model" by figavre@microsoft.com — merged
+  Channel Pages: YES (path-filtered)
+  Files:
+    M src/auth/handler.ts
+- PR #1557509: "Add unified EntityType.pages" by marioiri@microsoft.com — merged
+  Channel Pages: YES (path-filtered)
+  Files:
+    M src/auth/handler.ts
+EOF
+  cat > "$TEST_DIR/drift-status.md" <<EOF
+# Active Drift Alerts
+
+- [ ] 2026-05-13 | architecture.md | Authentication | PR #1561672, #1557509 | HIGH
+EOF
+
+  python3 "$HELPER" suggest-dedup "$TEST_DIR"
+
+  # pr_authors should map both PR numbers to their authors
+  has_authors=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_authors' in d)")
+  [ "$has_authors" = "True" ]
+  author_1561672=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_authors'].get('1561672', ''))")
+  [ "$author_1561672" = "figavre@microsoft.com" ]
+  author_1557509=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(d['pr_authors'].get('1557509', ''))")
+  [ "$author_1557509" = "marioiri@microsoft.com" ]
+}
+
+@test "suggest-dedup pr_authors handles missing daily-report gracefully" {
+  cat > "$TEST_DIR/drift-status.md" <<EOF
+# Active Drift Alerts
+
+- [ ] 2026-05-13 | architecture.md | Authentication | PR #42 | HIGH
+EOF
+  # No daily-report.md written
+
+  python3 "$HELPER" suggest-dedup "$TEST_DIR"
+
+  has_authors=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_authors' in d)")
+  [ "$has_authors" = "True" ]
+  # No PRs known → empty map (not crash)
+  count=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['pr_authors']))")
+  [ "$count" = "0" ]
+}
+
 @test "suggest-dedup filters alerts with pending open PRs" {
   cat > "$TEST_DIR/drift-status.md" <<EOF
 # Active Drift Alerts
