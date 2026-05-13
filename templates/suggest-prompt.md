@@ -69,8 +69,8 @@ For each remaining alert from Step 1:
    - **1-4 sections AND <500 lines:** Read the ENTIRE doc for fuller context. Still target the specific section for FIND/REPLACE, but use the full doc context for better understanding.
    - **1-4 sections AND ≥500 lines:** Read the target section plus its adjacent sections (one before, one after) for context.
    - **0 sections (no `##` headers):** Treat the entire doc as one section called "Main". Generate suggestions for the whole doc.
-4. Identify the PR(s) that triggered the alert. If multiple PRs are listed in the same alert (e.g., "PR #42, #47, #51"), sort them by merge date and read ALL their diffs together. Generate ONE combined suggestion. If more than 5 PRs are grouped, analyze only the 5 most recent; mention older ones in the summary. If a later PR's changes conflict with an earlier one's, set confidence to REVIEW.
-5. If the PR is in today's daily-report.md, get its Description, Files, and Diff fields. If not, use the PR title from the alert entry.
+4. Identify the PR(s) that triggered the alert. The structured field `actionable_alerts[].pr_numbers` in `suggest-context.json` is the authoritative list of triggering PR numbers (as strings) for each alert — use it directly. Do NOT re-extract PR numbers from the alert's `trigger` prose. Sort the PRs by merge date and read ALL their diffs together. Generate ONE combined suggestion. If more than 5 PRs are grouped, analyze only the 5 most recent; mention older ones in the summary. If a later PR's changes conflict with an earlier one's, set confidence to REVIEW. If `pr_numbers` is empty (anomaly alerts and similar have no PR refs), fall back to the alert's `trigger` description for context.
+5. If the PR is in today's daily-report.md, get its Description, Files, and Diff fields. If not, use the title from `pr_meta[pr_number]` (preferred) or the alert entry.
 
 **Using the Diff field:** If the PR has a `Diff:` field, use the actual code diff to understand EXACTLY what changed. The diff shows function renames, parameter additions, behavioral changes, and deleted code. Use this for precise FIND/REPLACE suggestions instead of inferring from the PR title.
 
@@ -110,11 +110,13 @@ If you cannot determine what specifically needs updating, generate a REVIEW sugg
 
 ## Step 4: Generate Changelog Entries
 
-For each suggestion from Step 3, create a changelog entry with:
+For each suggestion from Step 3, write one changelog entry per triggering PR. The set of triggering PRs is `actionable_alerts[].pr_numbers` from `suggest-context.json` — there is no ambiguity, no need to re-derive it from prose. Each entry has:
 - **Changed**: What changed, stated factually (e.g., "renamed handleError to classifyError", "added retry logic for file creation timeout")
 - **Why**: From the PR description, summarize WHY the change was made in 1-2 sentences. If no description is available, write "No PR description provided."
 
-**PR metadata lookup:** Look up each PR in `suggest-context.json` at the `pr_meta` map (key = PR number string, value = `{author, title, url}`). Use these values to build the entry header. If a PR number is missing from `pr_meta`, also check `daily-report.md` for the line `- PR #<id>: "<title>" by <author> — merged`. NEVER write `(unknown)` — if a field is genuinely unavailable, write `(no <field> recorded)` instead so a human can spot the gap.
+**PR metadata lookup (mandatory, mechanical):** For every PR number in `alert.pr_numbers`, look it up in `pr_meta[pr_number_as_string]` and use the `author`, `title`, and `url` directly in the entry header. The lookup is deterministic — if `pr_numbers` contains the ID, `pr_meta` will have its metadata (`pr_meta` covers every PR in today's `daily-report.md`).
+
+Only if a PR is *not* in `pr_meta` (e.g., you chose to attribute a suggestion to a PR outside the alert's `pr_numbers`), fall back to `daily-report.md` for `- PR #<id>: "<title>" by <author> — merged`. NEVER write `(unknown)` — if a field is genuinely unavailable after both lookups, write `(no <field> recorded)` instead so a human can spot the gap.
 
 ## Step 5: Write Output
 

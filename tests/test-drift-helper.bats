@@ -532,6 +532,54 @@ EOF
   echo "$skipped_reason" | grep -q "open autodocs PR"
 }
 
+@test "suggest-dedup exposes pr_numbers on each actionable alert" {
+  # Each alert must carry its triggering PR numbers as structured data, so
+  # the suggest LLM can attribute changelog entries via pr_meta without
+  # re-scraping prose. Without this, downstream attribution falls back to
+  # "(unknown)" even when pr_meta has the data.
+  cat > "$TEST_DIR/drift-status.md" <<EOF
+# Active Drift Alerts
+
+- [ ] 2026-05-13 | architecture.md | Authentication | PR #1561672, #1557509 | HIGH
+- [ ] 2026-05-13 | architecture.md | Error Handling | 2 PRs modified handler.ts (PRs: #1538481, #1477230) | CRITICAL
+EOF
+
+  python3 "$HELPER" suggest-dedup "$TEST_DIR"
+
+  # Both alerts actionable
+  actionable=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['actionable_alerts']))")
+  [ "$actionable" = "2" ]
+
+  # Each must carry pr_numbers as a list of strings matching its trigger
+  prs_0=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(','.join(d['actionable_alerts'][0]['pr_numbers']))")
+  [ "$prs_0" = "1561672,1557509" ]
+  prs_1=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(','.join(d['actionable_alerts'][1]['pr_numbers']))")
+  [ "$prs_1" = "1538481,1477230" ]
+
+  # Type must be list[str] (matches pr_meta keys for direct lookup)
+  types=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(all(isinstance(p,str) for a in d['actionable_alerts'] for p in a['pr_numbers']))")
+  [ "$types" = "True" ]
+}
+
+@test "suggest-dedup pr_numbers is empty list when trigger has no PR refs" {
+  # Anomaly alerts and similar can have triggers without #N references.
+  # The field must still exist as an empty list, not be missing.
+  cat > "$TEST_DIR/drift-status.md" <<EOF
+# Active Drift Alerts
+
+- [ ] 2026-05-13 | architecture.md | Telemetry | 3 new error strings not in known patterns (Kusto) | HIGH
+EOF
+
+  python3 "$HELPER" suggest-dedup "$TEST_DIR"
+
+  actionable=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['actionable_alerts']))")
+  [ "$actionable" = "1" ]
+  has_field=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print('pr_numbers' in d['actionable_alerts'][0])")
+  [ "$has_field" = "True" ]
+  count=$(python3 -c "import json;d=json.load(open('$TEST_DIR/suggest-context.json'));print(len(d['actionable_alerts'][0]['pr_numbers']))")
+  [ "$count" = "0" ]
+}
+
 @test "suggest-dedup skips LOW confidence alerts" {
   cat > "$TEST_DIR/drift-status.md" <<EOF
 # Active Drift Alerts

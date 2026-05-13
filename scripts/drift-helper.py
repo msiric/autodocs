@@ -732,9 +732,13 @@ def suggest_dedup(output_dir: str | Path) -> None:
 
         doc = entry["doc"]
         section = entry["section"]
+        trigger = entry.get("trigger", "")
+        # PR numbers parsed once and exposed on the actionable alert so the
+        # suggest LLM can attribute changelog entries via pr_meta without
+        # re-scraping prose. Stored as strings to match pr_meta keys.
+        trigger_prs = re.findall(r"#(\d+)", trigger)
 
         # Check if all triggering PRs already have changelog entries
-        trigger_prs = re.findall(r"#(\d+)", entry.get("trigger", ""))
         all_in_changelog = trigger_prs and all(
             (doc, section, int(pr)) in changelog_entries for pr in trigger_prs
         )
@@ -758,7 +762,8 @@ def suggest_dedup(output_dir: str | Path) -> None:
         actionable.append({
             "doc": doc,
             "section": section,
-            "trigger": entry.get("trigger", ""),
+            "trigger": trigger,
+            "pr_numbers": trigger_prs,
             "confidence": entry["confidence"],
         })
 
