@@ -255,3 +255,153 @@ class TestPathSafety:
         verify_helper.verify_replaces(out, repo)
         # Identifier not anywhere → MISMATCH (legacy behavior preserved)
         assert _value_status(out, "WontMatter") == "MISMATCH"
+
+
+# ---------------------------------------------------------------------------
+# verify_finds — FIND-block parsing must match apply_engine exactly
+# ---------------------------------------------------------------------------
+# Regression: verify-helper used to have its own FIND parser that terminated
+# at a bare ">" line (legitimate markdown for an empty quoted line inside a
+# multi-line FIND). apply_engine.parse_suggestions correctly handled bare ">"
+# and got the full block. A hallucinated FIND whose first line happened to
+# exist in the doc would silently PASS verify, then silently FAIL at apply
+# with no surfaced reason. Both consumers now use parse_suggestions, so the
+# FIND text checked by verify is byte-identical to what apply later matches.
+
+class TestVerifyFindsSharedParser:
+    def _write_doc(self, repo: Path, content: str) -> None:
+        target = repo / "docs" / "channel-pages" / "architecture.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+
+    def _write_workspace(self, tmp_path: Path, suggestions_md: str) -> tuple[Path, Path]:
+        out = tmp_path / "output"
+        out.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (out / "drift-suggestions.md").write_text(suggestions_md)
+        (out / "config.yaml").write_text(
+            "platform: github\n"
+            "github:\n  owner: o\n  repo: r\n"
+            "docs:\n  - name: architecture.md\n    repo_path: docs/channel-pages/architecture.md\n"
+        )
+        return out, repo
+
+    def test_bare_gt_inside_find_block_does_not_truncate(self, tmp_path: Path):
+        """A FIND block with a bare '>' separating prose paragraphs (a real
+        LLM-output pattern, e.g. PR #1505005 Tab CRUD case on 2026-05-13) must
+        be verified as a whole. If the parser truncates at the bare '>', it
+        would verify only the first line — which may exist in the doc even
+        when the multi-line FIND does not.
+        """
+        suggestions = (
+            "## architecture.md — Tab CRUD Operations\n"
+            "**Triggered by:** PR #1505005\n"
+            "**Confidence:** CONFIDENT\n"
+            "\n"
+            "### FIND (in architecture.md, section \"Tab CRUD Operations\"):\n"
+            "> `useCreateChannelPageTab`:\n"
+            ">\n"
+            "> 1. Executes mutation\n"
+            "> 2. Follows with `updateTabNavigationEventMutation` to trigger navigation\n"
+            "> 3. Appends scenario event data\n"
+            "\n"
+            "### REPLACE WITH:\n"
+            "> `useCreateChannelPageTab` now branches on `enableTabsPlusPlus`\n"
+            "\n"
+            "**Verified:** YES — FIND text confirmed in doc\n"
+        )
+        # Doc contains ONLY the first line of the FIND. The remaining lines
+        # (the "2. Follows with..." step) describe pre-Tabs++ behavior that
+        # has since been rewritten on master. apply_engine would not find the
+        # full FIND in the doc; verify must agree.
+        doc_content = (
+            "# Architecture\n\n"
+            "## Tab CRUD Operations\n\n"
+            "`useCreateChannelPageTab`:\n\n"
+            "1. Executes mutation\n"
+            "2. Branches on Tabs++ via `writeSelectedTabIdApollo` or the legacy path\n"
+            "3. Appends scenario event data\n"
+        )
+        out, repo = self._write_workspace(tmp_path, suggestions)
+        self._write_doc(repo, doc_content)
+
+        ok = verify_helper.verify_finds(out, repo)
+        results = json.loads((out / "verified-suggestions.json").read_text())
+        assert len(results) == 1
+        assert results[0]["confidence"] == "CONFIDENT"
+        # The whole FIND is not in the doc → must FAIL
+        assert results[0]["status"] == "FAIL", \
+            f"Expected FAIL (hallucinated multi-line FIND), got {results[0]['status']}"
+        assert ok is False
+
+    def test_multi_line_find_matching_doc_passes(self, tmp_path: Path):
+        """Multi-line FIND whose every line (incl. the blank one) matches the
+        doc must PASS. This pins the positive case so we don't over-correct."""
+        suggestions = (
+            "## architecture.md — Error Handling\n"
+            "**Triggered by:** PR #1\n"
+            "**Confidence:** CONFIDENT\n"
+            "\n"
+            "### FIND (in architecture.md, section \"Error Handling\"):\n"
+            "> Errors are categorized as:\n"
+            ">\n"
+            "> - `RecoverableError`\n"
+            "> - `FatalError`\n"
+            "\n"
+            "### REPLACE WITH:\n"
+            "> Errors are categorized as `RecoverableError` or `FatalError`.\n"
+            "\n"
+            "**Verified:** YES\n"
+        )
+        doc_content = (
+            "# Architecture\n\n"
+            "## Error Handling\n\n"
+            "Errors are categorized as:\n\n"
+            "- `RecoverableError`\n"
+            "- `FatalError`\n"
+        )
+        out, repo = self._write_workspace(tmp_path, suggestions)
+        self._write_doc(repo, doc_content)
+
+        ok = verify_helper.verify_finds(out, repo)
+        results = json.loads((out / "verified-suggestions.json").read_text())
+        assert len(results) == 1
+        assert results[0]["status"] == "PASS"
+        assert ok is True
+
+    def test_verify_and_apply_share_parser_invariant(self, tmp_path: Path):
+        """Direct property test: for any suggestions file, the FIND text that
+        verify-helper checks must equal what apply_engine.parse_suggestions
+        produces. Pins the 'one parser' contract."""
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from apply_engine import parse_suggestions as _parse
+
+        suggestions = (
+            "## architecture.md — S\n"
+            "**Confidence:** CONFIDENT\n"
+            "\n"
+            "### FIND (in architecture.md, section \"S\"):\n"
+            "> line A\n"
+            ">\n"
+            "> line C after blank\n"
+            "\n"
+            "### REPLACE WITH:\n"
+            "> new\n"
+            "\n"
+            "**Verified:** YES\n"
+        )
+        out, repo = self._write_workspace(tmp_path, suggestions)
+        self._write_doc(repo, "line A\n\nline C after blank\n")
+
+        # apply_engine view
+        apply_finds = [s.find_text for s in _parse(suggestions)]
+        # verify-helper view
+        verify_helper.verify_finds(out, repo)
+        results = json.loads((out / "verified-suggestions.json").read_text())
+        # Same count
+        assert len(results) == len(apply_finds)
+        # Same prefix (verify truncates to 100 chars for storage)
+        for verify_r, apply_find in zip(results, apply_finds):
+            assert verify_r["find_text"] == apply_find[:100]

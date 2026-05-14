@@ -56,7 +56,28 @@ def verify_finds(output_dir: str | Path, repo_dir: str | Path) -> bool:
     Reads drift-suggestions.md, checks each FIND text against the actual file
     in the repo. Writes verified-suggestions.json with pass/fail per suggestion.
     This is the deterministic quality gate — no LLM involved.
+
+    The suggestion parser is reused from apply_engine so verify and apply
+    operate on byte-identical FIND text. A prior bug had two independent
+    parsers diverge on bare ">" lines (legitimate empty quoted lines inside a
+    multi-line FIND): verify-helper terminated the block at the bare ">" and
+    checked only the first line of the FIND, while apply_engine kept the full
+    block. Hallucinated FINDs that happened to share a prefix with the doc
+    silently passed verify and then silently failed at apply with no surfaced
+    reason. Sharing the parser eliminates that whole class of drift by
+    construction — there is exactly one definition of "what the FIND text is".
     """
+    # Local import: apply_engine sits next to this script. Importing at module
+    # scope would force every verify-helper invocation (including ops that
+    # don't touch suggestions) to load apply_engine's full dependency set.
+    # When invoked as `python3 scripts/verify-helper.py …` Python puts the
+    # script's directory on sys.path automatically; when loaded via importlib
+    # (tests, embedded callers) it does not — so we add it explicitly.
+    _scripts_dir = str(Path(__file__).resolve().parent)
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    from apply_engine import parse_suggestions
+
     output_dir = Path(output_dir)
     repo_dir = Path(repo_dir)
     suggestions_path = output_dir / "drift-suggestions.md"
@@ -68,68 +89,27 @@ def verify_finds(output_dir: str | Path, repo_dir: str | Path) -> bool:
         return True
     config = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace")) or {}
 
-    # Build doc name → repo path mapping
     doc_paths = {}
     for doc in config.get("docs") or []:
         if doc.get("repo_path"):
             doc_paths[doc["name"]] = repo_dir / doc["repo_path"]
 
-    # Parse FIND blocks from suggestions file
     text = suggestions_path.read_text(encoding="utf-8", errors="replace")
     results = []
-    current_doc = ""
-    current_find = []
-    in_find = False
-    confidence = ""
-
-    def _verify_pending_find() -> None:
-        """Verify the currently accumulated FIND block and append result."""
-        find_text = "\n".join(current_find)
-        if not find_text or not current_doc:
-            return
-        doc_path = doc_paths.get(current_doc)
+    for s in parse_suggestions(text):
+        doc_path = doc_paths.get(s.doc)
         if not doc_path or not doc_path.exists():
-            results.append({
-                "doc": current_doc, "find_text": find_text[:100],
-                "confidence": confidence, "status": "SKIP",
-                "reason": "doc not found in repo",
-            })
-            return
-        doc_text = doc_path.read_text(encoding="utf-8", errors="replace")
-        status, reason = _check_find_in_doc(find_text, doc_text)
+            status, reason = "SKIP", "doc not found in repo"
+        else:
+            doc_text = doc_path.read_text(encoding="utf-8", errors="replace")
+            status, reason = _check_find_in_doc(s.find_text, doc_text)
         results.append({
-            "doc": current_doc, "find_text": find_text[:100],
-            "confidence": confidence, "status": status, "reason": reason,
+            "doc": s.doc,
+            "find_text": s.find_text[:100],
+            "confidence": s.confidence,
+            "status": status,
+            "reason": reason,
         })
-
-    for line in text.splitlines():
-        doc_match = re.match(r"## (\S+\.\w+)\s*[\u2014\u2013\-]", line)
-        if doc_match:
-            current_doc = doc_match.group(1)
-            continue
-
-        if line.startswith("**Confidence:**"):
-            confidence = "CONFIDENT" if "CONFIDENT" in line else "REVIEW"
-            continue
-
-        if "### FIND" in line:
-            in_find = True
-            current_find = []
-            continue
-
-        if in_find:
-            if line.startswith("> "):
-                current_find.append(line[2:])
-                continue
-            elif line.strip() == "":
-                continue
-            else:
-                in_find = False
-                _verify_pending_find()
-
-    # Process any pending FIND block at end of file
-    if in_find:
-        _verify_pending_find()
 
     (output_dir / "verified-suggestions.json").write_text(
         json.dumps(results, indent=2) + "\n"
