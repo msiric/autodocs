@@ -605,6 +605,98 @@ EOF
   [ "$count" = "0" ]
 }
 
+@test "group_alerts: merged PR list is sorted (deterministic across PYTHONHASHSEED)" {
+  # When two alerts hit the same (doc, section), group_alerts unions their
+  # PR lists. The result must be sorted so drift-status.md's "(PRs: #N, …)"
+  # text is stable across processes; set-iteration order otherwise depends
+  # on PYTHONHASHSEED and silently shuffles the PR sequence the LLM sees.
+  cat > "$TEST_DIR/daily-report.md" <<EOF
+---
+date: 2026-05-13
+---
+## Team PRs (last 24h)
+- PR #4242: "Later PR" by alice — merged
+  API: YES (packages/auth/)
+  Files:
+    M packages/auth/handler.ts
+- PR #1111: "Earlier PR" by bob — merged
+  API: YES (packages/auth/)
+  Files:
+    M packages/auth/handler.ts
+- PR #3333: "Middle PR" by carol — merged
+  API: YES (packages/auth/)
+  Files:
+    M packages/auth/handler.ts
+EOF
+  cat > "$TEST_DIR/resolved-mappings.md" <<EOF
+M packages/auth/handler.ts → Authentication
+EOF
+
+  python3 "$HELPER" pre-process "$TEST_DIR"
+
+  prs=$(python3 -c "
+import json
+d = json.load(open('$TEST_DIR/drift-context.json'))
+auth = [a for a in d.get('new_alerts', []) if a['section'] == 'Authentication']
+print(','.join(str(p) for p in auth[0]['prs']))")
+  [ "$prs" = "1111,3333,4242" ]
+}
+
+@test "_detect_changelog_supersession: warnings are sorted (deterministic across PYTHONHASHSEED)" {
+  # The function iterates a set of (doc, section, pr_num) tuples. Without
+  # sorted(), iteration order is PYTHONHASHSEED-dependent → changelog_warnings
+  # ordering in suggest-context.json differs across runs even when input is
+  # byte-identical (confirmed on runs #2 vs #3 of the Feb-20 experiment).
+  cat > "$TEST_DIR/daily-report.md" <<EOF
+---
+date: 2026-05-13
+---
+## Team PRs (last 24h)
+- PR #100: "First" by a — merged
+  API: YES (packages/auth/)
+  Files:
+    M packages/auth/handler.ts
+- PR #200: "Second" by b — merged
+  API: YES (packages/auth/)
+  Files:
+    M packages/auth/handler.ts
+- PR #300: "Third" by c — merged
+  API: YES (packages/auth/)
+  Files:
+    M packages/auth/handler.ts
+EOF
+  cat > "$TEST_DIR/drift-status.md" <<EOF
+# Active Drift Alerts
+
+- [ ] 2026-05-13 | architecture.md | Authentication | PR #100 | HIGH
+EOF
+  # Pre-existing changelog covering PRs #100 and #200 in DIFFERENT sections,
+  # both sharing files with later PR #300. Both should produce supersession
+  # warnings; their ordering must be deterministic.
+  cat > "$TEST_DIR/changelog-architecture.md" <<EOF
+# architecture.md — Changelog
+
+## Z-Section
+
+### 2026-05-13 — PR #200 by b
+**Changed:** earlier
+
+## A-Section
+
+### 2026-05-13 — PR #100 by a
+**Changed:** earliest
+EOF
+
+  python3 "$HELPER" suggest-dedup "$TEST_DIR"
+
+  ordering=$(python3 -c "
+import json
+d = json.load(open('$TEST_DIR/suggest-context.json'))
+print(';'.join(f\"{w['doc']}|{w['section']}|{w['pr']}\" for w in d.get('changelog_warnings', [])))")
+  # Lexicographic on (doc, section, pr): A-Section before Z-Section
+  [ "$ordering" = "architecture.md|A-Section|100;architecture.md|Z-Section|200" ]
+}
+
 @test "suggest-dedup skips LOW confidence alerts" {
   cat > "$TEST_DIR/drift-status.md" <<EOF
 # Active Drift Alerts

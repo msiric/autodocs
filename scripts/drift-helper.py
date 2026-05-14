@@ -378,7 +378,12 @@ def group_alerts(alerts: list[dict]) -> list[dict]:
     for a in alerts:
         key = (a["doc"], a["section"])
         if key in grouped:
-            grouped[key]["prs"] = list(set(grouped[key]["prs"] + a["prs"]))
+            # sorted() instead of plain list() so the PR sequence is stable
+            # across runs. The output flows into drift-status.md as
+            # "(PRs: #N1, #N2, …)", which then becomes LLM input — without
+            # the sort, set-iteration order (PYTHONHASHSEED-dependent) would
+            # silently shuffle PR numbers between runs.
+            grouped[key]["prs"] = sorted(set(grouped[key]["prs"] + a["prs"]))
             # Escalate confidence: CRITICAL > HIGH > LOW
             rank = {"CRITICAL": 3, "HIGH": 2, "LOW": 1}
             if rank.get(a["confidence"], 0) > rank.get(grouped[key]["confidence"], 0):
@@ -885,9 +890,13 @@ def _detect_changelog_supersession(output_dir: Path, changelog_entries: set[tupl
     for pr in report.get("prs", []):
         pr_files[pr["number"]] = [f["path"] for f in pr.get("files", [])]
 
-    # For each changelog entry, check if a later PR touched the same files
+    # For each changelog entry, check if a later PR touched the same files.
+    # sorted() pins the iteration order — changelog_entries is a set, whose
+    # iteration order depends on PYTHONHASHSEED and would otherwise produce
+    # a non-deterministic `changelog_warnings` ordering in suggest-context.json
+    # (verified across runs #2 and #3 of the Feb-20 lookback experiment).
     seen = set()
-    for (doc, section, pr_num) in changelog_entries:
+    for (doc, section, pr_num) in sorted(changelog_entries):
         files_for_pr = pr_files.get(pr_num, [])
         if not files_for_pr:
             continue
