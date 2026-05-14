@@ -275,6 +275,75 @@ def copy_sources(output_dir: str | Path, repo_dir: str | Path) -> int:
     return copied
 
 
+def sync_canonical_docs(output_dir: str | Path, repo_dir: str | Path) -> None:
+    """Refresh output_dir's mirror of each documented file (doc + changelog)
+    from origin/<target_branch>.
+
+    The suggest LLM is sandboxed to output_dir (`add_dirs=[output_dir]`), so it
+    reads doc and changelog files from there. Both are master-derived state:
+
+      - The doc body is INPUT — the LLM compares it against current source to
+        detect drift. A stale local copy means the LLM compares fresh source
+        against an old doc snapshot, which produces either false positives
+        (proposing edits that already shipped) or false negatives (missing
+        drift the local doc happens to already describe).
+      - The changelog is INPUT for `suggest_dedup` (which PRs are already
+        documented?) AND output (the LLM appends new entries each run). If
+        the local changelog is a pure accumulator, every autodocs PR that
+        gets abandoned still leaves changelog entries locally, suppressing
+        future alerts for those same PRs. Real drift gets quietly skipped.
+
+    Sync semantics, per doc entry in `config.docs`:
+      - DOC: refresh if master has it. If master does not, leave the local
+        copy alone (bootstrap case — user may be staging a new doc that
+        autodocs's first PR will create on master).
+      - CHANGELOG: refresh if master has it. If master does not, REMOVE the
+        local copy. The changelog has no bootstrap case: until autodocs
+        ships a PR that adds one, master has none, and any local content is
+        phantom state from abandoned runs.
+
+    Falls back to no-op if origin/<target_branch> is unreachable (e.g.,
+    shallow clones); the local files are left unchanged. Matches the
+    fallback semantics of `copy_sources`.
+    """
+    output_dir = Path(output_dir)
+    repo_dir = Path(repo_dir)
+
+    config = load_config(output_dir)
+    target_branch = (config.get("auto_pr") or {}).get("target_branch") or "main"
+    ref = f"origin/{target_branch}"
+
+    if not _origin_ref_exists(repo_dir, ref):
+        print(
+            f"sync-canonical-docs: {ref} not found locally; skipping refresh",
+            file=sys.stderr,
+        )
+        return
+
+    for doc in config.get("docs") or []:
+        name = doc.get("name")
+        repo_path = doc.get("repo_path")
+        if not name or not repo_path:
+            continue
+
+        # Doc body: refresh from master if present; preserve local when absent.
+        doc_content = _fetch_file_from_ref(repo_dir, ref, repo_path)
+        if doc_content is not None:
+            (output_dir / name).write_bytes(doc_content)
+
+        # Companion changelog (`changelog-<stem>.md` next to the doc):
+        # refresh from master if present; REMOVE local copy when absent.
+        stem = Path(name).stem
+        changelog_filename = f"changelog-{stem}.md"
+        changelog_local = output_dir / changelog_filename
+        changelog_repo_path = str(Path(repo_path).parent / changelog_filename)
+        changelog_content = _fetch_file_from_ref(repo_dir, ref, changelog_repo_path)
+        if changelog_content is not None:
+            changelog_local.write_bytes(changelog_content)
+        else:
+            changelog_local.unlink(missing_ok=True)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -295,6 +364,10 @@ def main() -> None:
         output_dir = sys.argv[2]
         repo_dir = sys.argv[3] if len(sys.argv) > 3 else "."
         copy_sources(output_dir, repo_dir)
+    elif operation == "sync-canonical-docs":
+        output_dir = sys.argv[2]
+        repo_dir = sys.argv[3] if len(sys.argv) > 3 else "."
+        sync_canonical_docs(output_dir, repo_dir)
     else:
         print(f"Unknown operation: {operation}", file=sys.stderr)
         sys.exit(1)

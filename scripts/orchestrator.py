@@ -1030,6 +1030,17 @@ def _run_with_lock(
     # main checkout is untouched (no conflict with in-progress work).
     work_dir = ensure_worktree(repo_dir, config, logger)
 
+    # Refresh output_dir's mirror of each doc + changelog from
+    # origin/<target_branch>. Without this, the LLM reads a stale doc
+    # snapshot, and suggest_dedup's "what's been documented" view includes
+    # phantom entries from autodocs PRs that were never merged to master —
+    # both quietly suppress real drift detection.
+    _run_helper(
+        scripts_dir, "pipeline-helper.py",
+        ["sync-canonical-docs", str(output_dir), str(work_dir)],
+        logger,
+    )
+
     # Pre-flight: verify doc paths exist on the canonical ref (in the worktree)
     config_helper = scripts_dir / "config-helper.py"
     if config_helper.exists():

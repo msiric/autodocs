@@ -251,3 +251,182 @@ class TestConfigHandling:
         assert copied == 1
         assert (output_dir / "source-context/src/mapped.ts").exists()
         assert not (output_dir / "source-context/src/unmapped.ts").exists()
+
+
+# ---------------------------------------------------------------------------
+# sync_canonical_docs — output_dir mirror of master-side doc + changelog
+# ---------------------------------------------------------------------------
+# Without this sync, the suggest LLM reads from output_dir/<doc>.md which is
+# never refreshed (observed: 6 weeks stale in production), and suggest_dedup
+# reads output_dir/changelog-<doc>.md which accumulates entries from every
+# autodocs PR — including the ones that were abandoned and never landed on
+# master. Both produce silent false negatives for real drift.
+
+def _write_docs_config(output_dir: Path, docs: list[dict], target_branch: str = "master") -> None:
+    """Write config.yaml with a docs[] list."""
+    import yaml as _yaml
+    (output_dir / "config.yaml").write_text(_yaml.safe_dump({
+        "auto_pr": {"target_branch": target_branch},
+        "docs": docs,
+    }))
+
+
+class TestSyncCanonicalDocs:
+    def test_refreshes_doc_from_master(self, tmp_path: Path):
+        """The local doc copy is overwritten with master's current content."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        _init_repo_with_master(repo_dir, {
+            "docs/area/architecture.md": "MASTER CONTENT\n",
+        })
+        _write_docs_config(output_dir, [
+            {"name": "architecture.md", "repo_path": "docs/area/architecture.md"},
+        ])
+        # Local file is stale
+        (output_dir / "architecture.md").write_text("STALE LOCAL\n")
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert (output_dir / "architecture.md").read_text() == "MASTER CONTENT\n"
+
+    def test_refreshes_changelog_from_master(self, tmp_path: Path):
+        """If master has the changelog, local is overwritten with master's."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        _init_repo_with_master(repo_dir, {
+            "docs/area/architecture.md": "doc\n",
+            "docs/area/changelog-architecture.md": "MASTER CHANGELOG\n",
+        })
+        _write_docs_config(output_dir, [
+            {"name": "architecture.md", "repo_path": "docs/area/architecture.md"},
+        ])
+        # Local changelog has phantom entries from abandoned PRs
+        (output_dir / "changelog-architecture.md").write_text(
+            "PHANTOM ENTRIES\n### PR #999 by ghost\n"
+        )
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert (output_dir / "changelog-architecture.md").read_text() == "MASTER CHANGELOG\n"
+
+    def test_removes_local_changelog_when_master_has_none(self, tmp_path: Path):
+        """The critical case: master has no changelog file. Any local copy is
+        accumulator state from abandoned autodocs PRs (the bug we observed in
+        production) and must be removed so suggest_dedup sees a clean slate."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        # Master has the doc but NOT the changelog
+        _init_repo_with_master(repo_dir, {
+            "docs/area/architecture.md": "doc\n",
+        })
+        _write_docs_config(output_dir, [
+            {"name": "architecture.md", "repo_path": "docs/area/architecture.md"},
+        ])
+        # Local changelog exists (phantom from abandoned PRs)
+        (output_dir / "changelog-architecture.md").write_text(
+            "## Section\n### 2026-05-13 — PR #123 by ghost\n**Changed:** never shipped\n"
+        )
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert not (output_dir / "changelog-architecture.md").exists(), \
+            "local changelog must be removed when master has no changelog"
+
+    def test_preserves_local_doc_when_master_has_none(self, tmp_path: Path):
+        """Bootstrap case: user stages a new doc that's not yet on master.
+        The local copy must be preserved so the apply step can ship it via the
+        first autodocs PR. Wiping it here would block the bootstrap path."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        # Master has neither doc nor changelog
+        _init_repo_with_master(repo_dir, {
+            "README.md": "placeholder\n",  # unrelated; just so master has a commit
+        })
+        _write_docs_config(output_dir, [
+            {"name": "architecture.md", "repo_path": "docs/area/architecture.md"},
+        ])
+        # User has the doc staged locally
+        (output_dir / "architecture.md").write_text("BOOTSTRAPPING NEW DOC\n")
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert (output_dir / "architecture.md").read_text() == "BOOTSTRAPPING NEW DOC\n", \
+            "local doc must be preserved when master has no copy"
+
+    def test_no_op_when_origin_ref_missing(self, tmp_path: Path, capsys):
+        """If origin/<target_branch> is unreachable (e.g., shallow clone), do
+        not touch local files. Matches copy_sources's fallback semantics."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        # repo_dir is empty — no origin/master
+        _git(repo_dir, "init", "-q", "-b", "master")
+        _write_docs_config(output_dir, [
+            {"name": "architecture.md", "repo_path": "docs/area/architecture.md"},
+        ])
+        (output_dir / "architecture.md").write_text("LOCAL\n")
+        (output_dir / "changelog-architecture.md").write_text("LOCAL CHANGELOG\n")
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert (output_dir / "architecture.md").read_text() == "LOCAL\n"
+        assert (output_dir / "changelog-architecture.md").read_text() == "LOCAL CHANGELOG\n"
+        assert "origin/master" in capsys.readouterr().err
+
+    def test_multi_doc_config(self, tmp_path: Path):
+        """Each doc + companion changelog in config.docs is processed."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        _init_repo_with_master(repo_dir, {
+            "docs/a/arch.md": "ARCH MASTER\n",
+            "docs/a/changelog-arch.md": "ARCH CHANGELOG MASTER\n",
+            "docs/b/guide.md": "GUIDE MASTER\n",
+            # No changelog for guide on master
+        })
+        _write_docs_config(output_dir, [
+            {"name": "arch.md", "repo_path": "docs/a/arch.md"},
+            {"name": "guide.md", "repo_path": "docs/b/guide.md"},
+        ])
+        (output_dir / "arch.md").write_text("STALE\n")
+        (output_dir / "guide.md").write_text("STALE\n")
+        (output_dir / "changelog-arch.md").write_text("STALE\n")
+        (output_dir / "changelog-guide.md").write_text("PHANTOM\n")
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert (output_dir / "arch.md").read_text() == "ARCH MASTER\n"
+        assert (output_dir / "guide.md").read_text() == "GUIDE MASTER\n"
+        assert (output_dir / "changelog-arch.md").read_text() == "ARCH CHANGELOG MASTER\n"
+        # Guide has no changelog on master → local phantom removed
+        assert not (output_dir / "changelog-guide.md").exists()
+
+    def test_idempotent(self, tmp_path: Path):
+        """Running twice produces identical state. Critical because the orchestrator
+        invokes this every pipeline run."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        _init_repo_with_master(repo_dir, {
+            "docs/area/architecture.md": "MASTER\n",
+            "docs/area/changelog-architecture.md": "MASTER CHANGELOG\n",
+        })
+        _write_docs_config(output_dir, [
+            {"name": "architecture.md", "repo_path": "docs/area/architecture.md"},
+        ])
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+        first_doc = (output_dir / "architecture.md").read_bytes()
+        first_changelog = (output_dir / "changelog-architecture.md").read_bytes()
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+        second_doc = (output_dir / "architecture.md").read_bytes()
+        second_changelog = (output_dir / "changelog-architecture.md").read_bytes()
+
+        assert first_doc == second_doc
+        assert first_changelog == second_changelog
+
+    def test_empty_docs_list_is_noop(self, tmp_path: Path):
+        """Config without docs[] entries → no-op (don't crash)."""
+        output_dir, repo_dir = _make_workspace(tmp_path)
+        _init_repo_with_master(repo_dir, {"README.md": "x\n"})
+        # No docs in config
+        import yaml as _yaml
+        (output_dir / "config.yaml").write_text(_yaml.safe_dump({
+            "auto_pr": {"target_branch": "master"},
+        }))
+        (output_dir / "stray.md").write_text("untouched\n")
+
+        pipeline_helper.sync_canonical_docs(output_dir, repo_dir)
+
+        assert (output_dir / "stray.md").read_text() == "untouched\n"
