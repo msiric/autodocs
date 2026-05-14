@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
@@ -289,11 +290,56 @@ def _extract_pr_number(subject: str) -> int | None:
     return None
 
 
+def _fetch_pr_detail_subprocess(
+    cli_name: str,
+    pr_number: int,
+    cmd: list[str],
+) -> str | None:
+    """Run a PR-details CLI command with one retry on transient errors.
+
+    Returns stdout on success. On final failure logs a single WARN to stderr
+    (which the launchd wrapper routes to sync.err.log) and returns None;
+    callers fall back to git-only PR data. Retry policy: retryable errors
+    (timeout/network/503/502 per `_classify_cli_error`) get one more attempt
+    after a 1-second sleep. Permanent errors fail immediately.
+
+    Originally the call was one-shot with silent None on any failure, so a
+    transient ADO API blip during one daily run would quietly drop that PR's
+    title/author/description — the pipeline would fall back to the raw git
+    subject ("Merged PR 1562395: <title>" with no author), and the next run
+    on the same input could produce wildly different LLM output depending on
+    which PRs happened to be enriched. The retry recovers transients; the
+    WARN surfaces permanent failures instead of swallowing them.
+    """
+    for attempt in (1, 2):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            # CLI absent — caller still falls back. Same message for every PR
+            # would just be noise; the operator notices via the wider failure.
+            return None
+        if result.returncode == 0:
+            return result.stdout
+        classified = _classify_cli_error(cli_name, result)
+        if attempt == 1 and classified.retryable:
+            time.sleep(1)
+            continue
+        print(
+            f"WARN: fetch_pr_details({cli_name}, PR #{pr_number}) failed: "
+            f"{classified.error}",
+            file=sys.stderr,
+        )
+        return None
+    return None
+
+
 def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
     """Fetch title, description, author for a single PR from platform API.
 
     Best-effort: returns None if the CLI is unavailable or the call fails.
     The pipeline can proceed with git-only data (number, files, diffs).
+    Transient CLI errors are retried once; permanent failures are logged
+    to stderr (see `_fetch_pr_detail_subprocess`).
     """
     platform = config.get("platform", "")
 
@@ -302,18 +348,15 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
         repo = config.get("github", {}).get("repo", "")
         if not owner or not repo:
             return None
-        try:
-            result = subprocess.run(
-                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
-                 "--jq", '{title: .title, body: .body, author: .user.login}'],
-                capture_output=True, text=True,
-            )
-        except FileNotFoundError:
-            return None
-        if result.returncode != 0:
+        stdout = _fetch_pr_detail_subprocess(
+            "gh", pr_number,
+            ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
+             "--jq", '{title: .title, body: .body, author: .user.login}'],
+        )
+        if stdout is None:
             return None
         try:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
             return {
                 "title": _sanitize_title(data.get("title", "")),
                 "description": _truncate_desc(data.get("body") or ""),
@@ -329,20 +372,17 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
         org = ado.get("org", "")
         if not org:
             return None
-        try:
-            result = subprocess.run(
-                ["az", "repos", "pr", "show", "--id", str(pr_number),
-                 "--org", f"https://dev.azure.com/{org}",
-                 "--query", "{title:title, description:description, author:createdBy.uniqueName}",
-                 "-o", "json"],
-                capture_output=True, text=True,
-            )
-        except FileNotFoundError:
-            return None
-        if result.returncode != 0:
+        stdout = _fetch_pr_detail_subprocess(
+            "az", pr_number,
+            ["az", "repos", "pr", "show", "--id", str(pr_number),
+             "--org", f"https://dev.azure.com/{org}",
+             "--query", "{title:title, description:description, author:createdBy.uniqueName}",
+             "-o", "json"],
+        )
+        if stdout is None:
             return None
         try:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
             return {
                 "title": _sanitize_title(data.get("title", "")),
                 "description": _truncate_desc(data.get("description") or ""),
@@ -356,17 +396,14 @@ def fetch_pr_details(config: dict, pr_number: int) -> dict | None:
         if not project_path:
             return None
         encoded = project_path.replace("/", "%2F")
-        try:
-            result = subprocess.run(
-                ["glab", "api", f"projects/{encoded}/merge_requests/{pr_number}"],
-                capture_output=True, text=True,
-            )
-        except FileNotFoundError:
-            return None
-        if result.returncode != 0:
+        stdout = _fetch_pr_detail_subprocess(
+            "glab", pr_number,
+            ["glab", "api", f"projects/{encoded}/merge_requests/{pr_number}"],
+        )
+        if stdout is None:
             return None
         try:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
             return {
                 "title": _sanitize_title(data.get("title", "")),
                 "description": _truncate_desc(data.get("description") or ""),

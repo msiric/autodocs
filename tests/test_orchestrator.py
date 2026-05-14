@@ -587,3 +587,123 @@ class TestFetchPrDetailsAdoCommand:
             "ado": {},  # missing org
         })
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# fetch_pr_details — retry + observable failure on platform CLI errors
+# ---------------------------------------------------------------------------
+# Originally the call was one-shot with silent None on any failure. During the
+# Feb-20 lookback experiment, a transient ADO API blip dropped 74/76 PRs'
+# enrichment in Run #1; subsequent runs got full enrichment for the same PRs.
+# The pipeline silently shipped LLM input that varied between runs (Merged-PR-N
+# fallback vs full title/description), masquerading as LLM stochasticity.
+# Retry recovers transients; WARN surfaces permanent failures.
+
+class TestFetchPrDetailsRetry:
+    def _setup(self, monkeypatch, exit_codes, stderrs=None, stdouts=None):
+        """Wire a fake subprocess.run that returns the given sequence."""
+        import subprocess as _sp
+        from sync_engine import fetch_pr_details
+
+        stderrs = stderrs or [""] * len(exit_codes)
+        stdouts = stdouts or [""] * len(exit_codes)
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, **kwargs):
+            idx = len(calls)
+            calls.append(list(cmd))
+            rc = exit_codes[min(idx, len(exit_codes) - 1)]
+            return type("_R", (), {
+                "returncode": rc,
+                "stdout": stdouts[min(idx, len(stdouts) - 1)],
+                "stderr": stderrs[min(idx, len(stderrs) - 1)],
+            })()
+
+        monkeypatch.setattr(_sp, "run", _fake_run)
+        # Don't actually sleep between attempts during tests
+        monkeypatch.setattr("sync_engine.time.sleep", lambda *_a, **_kw: None)
+        return fetch_pr_details, calls
+
+    def test_transient_failure_then_success(self, monkeypatch, capsys):
+        """Retryable error (timeout/503/etc.) → retry → success returns parsed payload."""
+        success_payload = json.dumps({
+            "title": "Real Title",
+            "description": "desc",
+            "author": "user@example.com",
+        })
+        fetch, calls = self._setup(
+            monkeypatch,
+            exit_codes=[1, 0],
+            stderrs=["timeout while reading response", ""],
+            stdouts=["", success_payload],
+        )
+        result = fetch({"platform": "ado", "ado": {"org": "myorg"}}, pr_number=42)
+        assert result == {
+            "title": "Real Title",
+            "description": "desc",
+            "author": "user@example.com",
+        }
+        assert len(calls) == 2, "expected one retry"
+        # Success path: no WARN emitted
+        assert "WARN: fetch_pr_details" not in capsys.readouterr().err
+
+    def test_transient_failure_twice_warns_and_returns_none(self, monkeypatch, capsys):
+        """Retryable failure twice → return None, log WARN with PR # and error."""
+        fetch, calls = self._setup(
+            monkeypatch,
+            exit_codes=[1, 1],
+            stderrs=["503 Service Unavailable", "503 Service Unavailable"],
+        )
+        result = fetch({"platform": "ado", "ado": {"org": "myorg"}}, pr_number=99)
+        assert result is None
+        assert len(calls) == 2, "expected exactly one retry (max 2 attempts total)"
+        warning = capsys.readouterr().err
+        assert "WARN: fetch_pr_details" in warning
+        assert "PR #99" in warning
+        assert "503" in warning
+
+    def test_permanent_failure_does_not_retry(self, monkeypatch, capsys):
+        """Non-retryable error (auth, unrecognized arg) → single call → WARN + None."""
+        fetch, calls = self._setup(
+            monkeypatch,
+            exit_codes=[1],
+            stderrs=["error: unrecognized argument: --bogus-flag"],
+        )
+        result = fetch({"platform": "ado", "ado": {"org": "myorg"}}, pr_number=7)
+        assert result is None
+        assert len(calls) == 1, "permanent errors must NOT retry"
+        warning = capsys.readouterr().err
+        assert "WARN: fetch_pr_details" in warning
+        assert "PR #7" in warning
+
+    def test_success_first_try_no_retry_no_warn(self, monkeypatch, capsys):
+        """Happy path: one call, no warning, parsed payload returned."""
+        payload = json.dumps({
+            "title": "ok",
+            "description": "",
+            "author": "x@y.com",
+        })
+        fetch, calls = self._setup(
+            monkeypatch,
+            exit_codes=[0],
+            stdouts=[payload],
+        )
+        result = fetch({"platform": "ado", "ado": {"org": "myorg"}}, pr_number=1)
+        assert result == {"title": "ok", "description": "", "author": "x@y.com"}
+        assert len(calls) == 1
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_cli_not_installed_silent(self, monkeypatch, capsys):
+        """FileNotFoundError (CLI missing) → return None silently. The error
+        is the same for every PR; logging per call would just be noise, and
+        the operator notices via the universal data-degradation pattern."""
+        import subprocess as _sp
+        from sync_engine import fetch_pr_details
+
+        def _missing(*_a, **_kw):
+            raise FileNotFoundError("az: command not found")
+
+        monkeypatch.setattr(_sp, "run", _missing)
+        result = fetch_pr_details({"platform": "ado", "ado": {"org": "myorg"}}, pr_number=1)
+        assert result is None
+        assert "WARN" not in capsys.readouterr().err
