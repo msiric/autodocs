@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
@@ -588,8 +589,67 @@ def git_branch_commit_push(
 # PR creation (multi-platform)
 # ---------------------------------------------------------------------------
 
+def _run_pr_cli_with_retry(
+    cli_name: str,
+    operation: str,
+    cmd: list[str],
+    *,
+    pr_label: str = "",
+) -> tuple[bool, str]:
+    """Run a PR-related CLI command with one retry on transient errors.
+
+    Returns `(success, stdout)`. On retryable errors (timeout, connection,
+    network, temporary, 503, 502 — classified by sync_engine's existing
+    `_classify_cli_error`) the command is retried once after a 1-second
+    sleep. On final failure, logs a single-line WARN to stderr including
+    the operation name, CLI tool, optional `pr_label`, and the captured
+    error — so failures are observable in sync.err.log instead of
+    silently returning None mid-pipeline.
+
+    Motivation: `create_pr` and `add_reviewers` previously ran their
+    CLIs once with no retry and no log. An ADO API blip during apply
+    silently aborted PR creation, leaving the just-pushed autodocs
+    branch orphaned with no surfaced reason in the daily log. This
+    mirrors the Fix #2 treatment applied to `fetch_pr_details`.
+
+    The local import of `_classify_cli_error` keeps the retryable-error
+    rules in a single source of truth (sync_engine.py) without forcing a
+    top-of-file dependency that loads sync_engine when apply_engine is
+    imported in isolation (e.g., by `verify-helper` for `parse_suggestions`).
+    """
+    from sync_engine import _classify_cli_error
+
+    for attempt in (1, 2):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            # CLI absent — same suppression as fetch_pr_details. The error
+            # would be the same for every call; logging here would just be
+            # noise. Callers fall back to their None-return semantics.
+            return False, ""
+        if result.returncode == 0:
+            return True, result.stdout
+        classified = _classify_cli_error(cli_name, result)
+        if attempt == 1 and classified.retryable:
+            time.sleep(1)
+            continue
+        suffix = f" ({pr_label})" if pr_label else ""
+        print(
+            f"WARN: {operation}({cli_name}){suffix} failed: {classified.error}",
+            file=sys.stderr,
+        )
+        return False, ""
+    return False, ""
+
+
 def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
-    """Create PR via platform CLI. Returns PR number or None."""
+    """Create PR via platform CLI. Returns PR number or None.
+
+    Failures (CLI error, retry exhausted, parse failure) are logged via
+    `_run_pr_cli_with_retry` so silent drops surface in sync.err.log.
+    Bitbucket's HTTP path is logged inline since it doesn't go through
+    the CLI helper.
+    """
     platform = config.get("platform", "")
     target = config.get("auto_pr", {}).get("target_branch", "main")
 
@@ -598,30 +658,31 @@ def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
         repo = config.get("github", {}).get("repo", "")
         if not owner or not repo:
             return None
-        result = subprocess.run(
+        ok, stdout = _run_pr_cli_with_retry(
+            "gh", "create_pr",
             ["gh", "pr", "create", "-R", f"{owner}/{repo}",
              "--title", title, "--body", body,
              "--base", target, "--head", branch, "--label", "autodocs"],
-            capture_output=True, text=True,
+            pr_label=f"branch {branch}",
         )
-        if result.returncode == 0:
+        if ok:
             # gh pr create prints the PR URL; extract number
-            url = result.stdout.strip()
-            m = re.search(r"/(\d+)$", url)
+            m = re.search(r"/(\d+)$", stdout.strip())
             return int(m.group(1)) if m else None
 
     elif platform == "gitlab":
         project = config.get("gitlab", {}).get("project_path", "")
         if not project:
             return None
-        result = subprocess.run(
+        ok, stdout = _run_pr_cli_with_retry(
+            "glab", "create_pr",
             ["glab", "mr", "create", "-R", project,
              "--title", title, "--description", body,
              "--target-branch", target, "--source-branch", branch, "--no-editor"],
-            capture_output=True, text=True,
+            pr_label=f"branch {branch}",
         )
-        if result.returncode == 0:
-            m = re.search(r"!(\d+)", result.stdout)
+        if ok:
+            m = re.search(r"!(\d+)", stdout)
             return int(m.group(1)) if m else None
 
     elif platform == "bitbucket":
@@ -646,8 +707,14 @@ def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 result = json.loads(resp.read())
                 return result.get("id")
-        except (urllib.error.URLError, json.JSONDecodeError, OSError):
-            pass
+        except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
+            # Bitbucket uses urllib instead of a CLI subprocess so it bypasses
+            # `_run_pr_cli_with_retry`. urllib's timeout=30 already provides
+            # some natural backoff; the missing piece was observability.
+            print(
+                f"WARN: create_pr(bitbucket) (branch {branch}) failed: {exc}",
+                file=sys.stderr,
+            )
 
     elif platform == "ado":
         ado = config.get("ado", {})
@@ -666,39 +733,37 @@ def create_pr(config: dict, branch: str, title: str, body: str) -> int | None:
         ]
         if work_items:
             cmd.extend(["--work-items", work_items])
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip().isdigit():
-            return int(result.stdout.strip())
+        ok, stdout = _run_pr_cli_with_retry(
+            "az", "create_pr", cmd, pr_label=f"branch {branch}",
+        )
+        if ok and stdout.strip().isdigit():
+            return int(stdout.strip())
 
     return None
 
 
 def add_reviewers(config: dict, pr_number: int) -> None:
-    """Add reviewers to a PR. Best-effort — prints warnings on failure."""
+    """Add reviewers to a PR. Best-effort — failures (CLI error, retry
+    exhausted, CLI missing) are logged via `_run_pr_cli_with_retry`
+    rather than silently dropped, so a flaky platform API doesn't quietly
+    leave reviewers unassigned.
+    """
     reviewers = config.get("auto_pr", {}).get("reviewers", [])
     if not reviewers or not pr_number:
         return
 
     platform = config.get("platform", "")
 
-    def _run_reviewer_cmd(cmd: list[str], reviewer: str) -> None:
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                stderr = (result.stderr or "").strip()[:200]
-                print(f"Warning: failed to add reviewer {reviewer}: {stderr}")
-        except FileNotFoundError:
-            print(f"Warning: CLI not found for adding reviewer {reviewer}")
-
     if platform == "github":
         owner = config.get("github", {}).get("owner", "")
         repo = config.get("github", {}).get("repo", "")
         if owner and repo:
             for reviewer in reviewers:
-                _run_reviewer_cmd(
+                _run_pr_cli_with_retry(
+                    "gh", "add_reviewer",
                     ["gh", "pr", "edit", str(pr_number),
                      "-R", f"{owner}/{repo}", "--add-reviewer", reviewer],
-                    reviewer,
+                    pr_label=f"PR #{pr_number}, reviewer {reviewer}",
                 )
 
     elif platform == "ado":
@@ -710,43 +775,46 @@ def add_reviewers(config: dict, pr_number: int) -> None:
         org = ado.get("org", "")
         if org:
             for reviewer in reviewers:
-                _run_reviewer_cmd(
+                _run_pr_cli_with_retry(
+                    "az", "add_reviewer",
                     ["az", "repos", "pr", "reviewer", "add",
                      "--id", str(pr_number),
                      "--reviewers", reviewer,
                      "--org", f"https://dev.azure.com/{org}"],
-                    reviewer,
+                    pr_label=f"PR #{pr_number}, reviewer {reviewer}",
                 )
 
     elif platform == "gitlab":
         project = config.get("gitlab", {}).get("project_path", "")
         if project:
-            reviewer_ids = []
+            reviewer_ids: list[str] = []
             for reviewer in reviewers:
+                ok, stdout = _run_pr_cli_with_retry(
+                    "glab", "lookup_reviewer",
+                    ["glab", "api", f"users?search={reviewer}"],
+                    pr_label=f"PR #{pr_number}, reviewer {reviewer}",
+                )
+                if not ok:
+                    continue
                 try:
-                    result = subprocess.run(
-                        ["glab", "api", f"users?search={reviewer}"],
-                        capture_output=True, text=True,
-                    )
-                except FileNotFoundError:
-                    print(f"Warning: glab CLI not found for adding reviewer {reviewer}")
-                    return
-                if result.returncode == 0:
-                    try:
-                        users = json.loads(result.stdout)
-                        if users:
-                            reviewer_ids.append(str(users[0]["id"]))
-                    except (json.JSONDecodeError, ValueError, KeyError):
-                        pass
+                    users = json.loads(stdout)
+                    if users:
+                        reviewer_ids.append(str(users[0]["id"]))
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    pass
             if reviewer_ids:
-                _run_reviewer_cmd(
+                _run_pr_cli_with_retry(
+                    "glab", "add_reviewer",
                     ["glab", "mr", "update", str(pr_number),
                      "-R", project, "--reviewer", ",".join(reviewer_ids)],
-                    ", ".join(reviewers),
+                    pr_label=f"PR #{pr_number}, reviewers {', '.join(reviewers)}",
                 )
 
     else:
-        print(f"Warning: reviewer assignment not supported for platform '{platform}'")
+        print(
+            f"WARN: add_reviewers: platform '{platform}' has no reviewer-assignment path",
+            file=sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------

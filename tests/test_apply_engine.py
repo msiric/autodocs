@@ -15,9 +15,11 @@ from apply_engine import (
     Suggestion,
     _clean_llm_artifacts,
     _merge_changelog_into,
+    _run_pr_cli_with_retry,
     add_reviewers,
     apply_edits,
     build_pr_body,
+    create_pr,
     filter_suggestions,
     parse_suggestions,
     record_tracking,
@@ -614,6 +616,7 @@ class TestAddReviewers:
 
         class _Result:
             returncode = 0
+            stdout = ""
             stderr = ""
 
         def _fake_run(cmd, **kwargs):
@@ -679,3 +682,260 @@ class TestAddReviewers:
             "auto_pr": {"reviewers": ["a@x.com"]},
         }, pr_number=0)
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# _run_pr_cli_with_retry — retry on transient errors, log on final failure
+# ---------------------------------------------------------------------------
+# Mirrors the Fix #2 contract that fetch_pr_details got: the bug we observed
+# was `az repos pr create` failing silently mid-apply (returncode != 0,
+# no log) — leaving the just-pushed autodocs branch orphaned with no PR
+# and no surfaced reason in sync.log. This helper is the shared retry+log
+# wrapper for create_pr and add_reviewers's per-platform CLI invocations.
+
+class TestRunPrCliWithRetry:
+    def _stub_run(self, monkeypatch, sequence):
+        """Patch subprocess.run with a sequence of (returncode, stdout, stderr).
+        Returns the recorded call list."""
+        import subprocess
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, **kwargs):
+            idx = len(calls)
+            calls.append(list(cmd))
+            rc, stdout, stderr = sequence[min(idx, len(sequence) - 1)]
+            return type("_R", (), {"returncode": rc, "stdout": stdout, "stderr": stderr})()
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+        # Don't actually sleep between attempts during tests
+        monkeypatch.setattr("apply_engine.time.sleep", lambda *_a, **_kw: None)
+        return calls
+
+    def test_success_first_try(self, monkeypatch, capsys):
+        """Happy path: one call, no retry, no warning."""
+        calls = self._stub_run(monkeypatch, [(0, "1234\n", "")])
+        ok, stdout = _run_pr_cli_with_retry("az", "create_pr", ["az", "repos", "pr", "create"])
+        assert ok is True
+        assert stdout == "1234\n"
+        assert len(calls) == 1
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_transient_failure_then_success(self, monkeypatch, capsys):
+        """Retryable error (503) → retry → success returns stdout, no warn."""
+        calls = self._stub_run(monkeypatch, [
+            (1, "", "TF503: Service Unavailable"),
+            (0, "5678\n", ""),
+        ])
+        ok, stdout = _run_pr_cli_with_retry(
+            "az", "create_pr", ["az", "repos", "pr", "create"],
+            pr_label="branch x",
+        )
+        assert ok is True
+        assert stdout == "5678\n"
+        assert len(calls) == 2, "expected one retry"
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_transient_failure_twice_warns(self, monkeypatch, capsys):
+        """Retryable failure twice → return False, log WARN with pr_label."""
+        calls = self._stub_run(monkeypatch, [
+            (1, "", "network timeout"),
+            (1, "", "network timeout"),
+        ])
+        ok, _ = _run_pr_cli_with_retry(
+            "az", "create_pr", ["az", "repos", "pr", "create"],
+            pr_label="branch user/me/autodocs-2026-05-14",
+        )
+        assert ok is False
+        assert len(calls) == 2, "max two attempts (one retry)"
+        warning = capsys.readouterr().err
+        assert "WARN: create_pr(az)" in warning
+        assert "branch user/me/autodocs-2026-05-14" in warning
+        assert "timeout" in warning
+
+    def test_permanent_failure_does_not_retry(self, monkeypatch, capsys):
+        """Non-retryable error (e.g., unrecognized argument) → single call → warn."""
+        calls = self._stub_run(monkeypatch, [
+            (1, "", "ERROR: unrecognized argument: --bogus"),
+        ])
+        ok, _ = _run_pr_cli_with_retry(
+            "az", "create_pr", ["az", "repos", "pr", "create"],
+            pr_label="branch x",
+        )
+        assert ok is False
+        assert len(calls) == 1, "permanent errors must NOT retry"
+        warning = capsys.readouterr().err
+        assert "WARN: create_pr(az)" in warning
+        assert "unrecognized argument" in warning
+
+    def test_cli_not_installed_silent(self, monkeypatch, capsys):
+        """FileNotFoundError → return False silently. Same suppression as
+        fetch_pr_details — operator notices the platform-wide failure
+        without per-call log noise."""
+        import subprocess
+
+        def _missing(*_a, **_kw):
+            raise FileNotFoundError("az: command not found")
+
+        monkeypatch.setattr(subprocess, "run", _missing)
+        ok, stdout = _run_pr_cli_with_retry("az", "create_pr", ["az", "repos"])
+        assert ok is False
+        assert stdout == ""
+        assert "WARN" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# create_pr — silent failures are now observable
+# ---------------------------------------------------------------------------
+
+class TestCreatePrObservability:
+    """Before Fix #6, create_pr returned None on any CLI failure with no log;
+    an ADO API blip during apply silently dropped the PR even though the
+    branch had been pushed. These tests pin the new contract: failures
+    surface in stderr (routed to sync.err.log) with the branch name."""
+
+    def _stub_run(self, monkeypatch, returncode: int, stdout: str = "", stderr: str = ""):
+        import subprocess
+        calls: list[list[str]] = []
+
+        def _fake(cmd, **kwargs):
+            calls.append(list(cmd))
+            return type("_R", (), {"returncode": returncode, "stdout": stdout, "stderr": stderr})()
+
+        monkeypatch.setattr(subprocess, "run", _fake)
+        monkeypatch.setattr("apply_engine.time.sleep", lambda *_a, **_kw: None)
+        return calls
+
+    def test_ado_failure_returns_none_and_logs(self, monkeypatch, capsys):
+        self._stub_run(monkeypatch, returncode=1, stderr="ERROR: unexpected failure")
+        result = create_pr(
+            {"platform": "ado", "ado": {"org": "myorg", "project": "MyProject", "repo": "r"}},
+            branch="user/me/autodocs-2026-05-14",
+            title="t", body="b",
+        )
+        assert result is None
+        err = capsys.readouterr().err
+        assert "WARN: create_pr(az)" in err
+        assert "branch user/me/autodocs-2026-05-14" in err
+        assert "unexpected failure" in err
+
+    def test_ado_success_returns_pr_number(self, monkeypatch, capsys):
+        self._stub_run(monkeypatch, returncode=0, stdout="1564563\n")
+        result = create_pr(
+            {"platform": "ado", "ado": {"org": "myorg", "project": "MyProject", "repo": "r"}},
+            branch="x", title="t", body="b",
+        )
+        assert result == 1564563
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_github_failure_logs(self, monkeypatch, capsys):
+        self._stub_run(monkeypatch, returncode=1, stderr="GraphQL error: not found")
+        result = create_pr(
+            {"platform": "github", "github": {"owner": "o", "repo": "r"}},
+            branch="x", title="t", body="b",
+        )
+        assert result is None
+        err = capsys.readouterr().err
+        assert "WARN: create_pr(gh)" in err
+        assert "not found" in err
+
+    def test_gitlab_failure_logs(self, monkeypatch, capsys):
+        self._stub_run(monkeypatch, returncode=1, stderr="403 forbidden")
+        result = create_pr(
+            {"platform": "gitlab", "gitlab": {"project_path": "g/r"}},
+            branch="x", title="t", body="b",
+        )
+        assert result is None
+        err = capsys.readouterr().err
+        assert "WARN: create_pr(glab)" in err
+
+    def test_bitbucket_http_failure_logs(self, monkeypatch, capsys):
+        """Bitbucket uses urllib not subprocess, but the failure must still
+        surface (the silent-fallback pattern is the same)."""
+        import urllib.error
+        import urllib.request
+
+        def _raise(*_a, **_kw):
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _raise)
+        monkeypatch.setenv("BITBUCKET_TOKEN", "tok")
+        result = create_pr(
+            {"platform": "bitbucket", "bitbucket": {"workspace": "ws", "repo": "r"}},
+            branch="user/me/x", title="t", body="b",
+        )
+        assert result is None
+        err = capsys.readouterr().err
+        assert "WARN: create_pr(bitbucket)" in err
+        assert "user/me/x" in err
+
+
+# ---------------------------------------------------------------------------
+# add_reviewers — same retry/log treatment applied to reviewer assignment
+# ---------------------------------------------------------------------------
+
+class TestAddReviewersObservability:
+    """Before Fix #6, _run_reviewer_cmd printed a warning but didn't retry;
+    a single ADO API flake silently dropped that reviewer. Verify the new
+    helper retries transients and surfaces permanent failures."""
+
+    def _stub_run(self, monkeypatch, sequence):
+        import subprocess
+        calls: list[list[str]] = []
+
+        def _fake(cmd, **kwargs):
+            idx = len(calls)
+            calls.append(list(cmd))
+            rc, stdout, stderr = sequence[min(idx, len(sequence) - 1)]
+            return type("_R", (), {"returncode": rc, "stdout": stdout, "stderr": stderr})()
+
+        monkeypatch.setattr(subprocess, "run", _fake)
+        monkeypatch.setattr("apply_engine.time.sleep", lambda *_a, **_kw: None)
+        return calls
+
+    def test_ado_reviewer_transient_then_success(self, monkeypatch, capsys):
+        """503 once, then OK: one retry, no warn, two calls total."""
+        calls = self._stub_run(monkeypatch, [
+            (1, "", "TF503 Service Unavailable"),
+            (0, "", ""),
+        ])
+        add_reviewers(
+            {"platform": "ado", "ado": {"org": "myorg"},
+             "auto_pr": {"reviewers": ["a@x.com"]}},
+            pr_number=42,
+        )
+        assert len(calls) == 2
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_ado_reviewer_permanent_failure_warns(self, monkeypatch, capsys):
+        calls = self._stub_run(monkeypatch, [
+            (1, "", "ERROR: User not found"),
+        ])
+        add_reviewers(
+            {"platform": "ado", "ado": {"org": "myorg"},
+             "auto_pr": {"reviewers": ["typo@x.com"]}},
+            pr_number=42,
+        )
+        assert len(calls) == 1
+        err = capsys.readouterr().err
+        assert "WARN: add_reviewer(az)" in err
+        assert "PR #42, reviewer typo@x.com" in err
+        assert "User not found" in err
+
+    def test_multi_reviewer_independent_failures(self, monkeypatch, capsys):
+        """Failure for one reviewer must not block the next."""
+        calls = self._stub_run(monkeypatch, [
+            (1, "", "User not found"),  # for first reviewer (permanent → no retry)
+            (0, "", ""),                # for second reviewer (success)
+        ])
+        add_reviewers(
+            {"platform": "ado", "ado": {"org": "myorg"},
+             "auto_pr": {"reviewers": ["typo@x.com", "ok@x.com"]}},
+            pr_number=42,
+        )
+        # 1 (fail, no retry) + 1 (success) = 2 calls
+        assert len(calls) == 2
+        err = capsys.readouterr().err
+        assert "WARN: add_reviewer(az)" in err
+        assert "typo@x.com" in err
+        # Second reviewer succeeded — no warning for ok@x.com
+        assert "ok@x.com" not in err
